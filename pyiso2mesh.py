@@ -55,6 +55,7 @@ def meshgrid5(*args):
 
     return node, elem
 
+#_________________________________________________________________________________________________________
 
 def meshgrid6(*args):
     # dimension of the lattice
@@ -98,6 +99,7 @@ def meshgrid6(*args):
 
     return node, elem
 
+#_________________________________________________________________________________________________________
 
 def lattice(*args):
     # generate a factorial lattice in n variables
@@ -109,6 +111,7 @@ def lattice(*args):
       g[:, i] = c[i].flatten()
     return g
 
+#_________________________________________________________________________________________________________
 
 def surfedge(f, *varargin):
     if f.size == 0:
@@ -146,11 +149,13 @@ def surfedge(f, *varargin):
 
     return openedge, elemid
 
+#_________________________________________________________________________________________________________
 
 def volface(t):
     openedge, elemid = surfedge(t)
     return openedge, elemid
 
+#_________________________________________________________________________________________________________
 
 def surfplane(node, face):
 # plane=surfplane(node,face)
@@ -172,6 +177,7 @@ def surfplane(node, face):
     plane = np.column_stack((N, d))
     return plane
 
+#_________________________________________________________________________________________________________
 
 import numpy as np
 
@@ -199,7 +205,7 @@ def surfacenorm(node, face, *args):
 
     return snorm
 
-
+#_________________________________________________________________________________________________________
 
 def nodesurfnorm(node, elem):
 #  nv=nodesurfnorm(node,elem)
@@ -239,7 +245,7 @@ def nodesurfnorm(node, elem):
 
     return nv
 
-
+#_________________________________________________________________________________________________________
 
 def plot_mesh(nodes, faces, color='blue', x_min=None, y_min=None, z_min=None):
     fig = go.Figure()
@@ -297,6 +303,7 @@ def plot_mesh(nodes, faces, color='blue', x_min=None, y_min=None, z_min=None):
                       width=700, height=700, margin=dict(r=20, l=10, b=10, t=10))
     fig.show()
 
+#_________________________________________________________________________________________________________
 
 def plotsurf(node, face, *args):
     rngstate = np.random.get_state()
@@ -366,6 +373,8 @@ def plotsurf(node, face, *args):
 
     np.random.set_state(rngstate)
 
+#_________________________________________________________________________________________________________
+
 def plotasurf(node, face, *args):
     if face.shape[1] <= 2:
         h = plotedges(node, face, *args)
@@ -383,6 +392,40 @@ def plotasurf(node, face, *args):
     if 'h' in locals():
         return h
 
+#_________________________________________________________________________________________________________
+
+def meshcentroid(v, f):
+#
+# centroid=meshcentroid(v,f)
+#
+# compute the centroids of a mesh defined by nodes and elements
+# (surface or tetrahedra) in R^n space
+#
+# input:
+#      v: surface node list, dimension (nn,3)
+#      f: surface face element list, dimension (be,3)
+#
+# output:
+#      centroid: centroid positions, one row for each element
+#
+    if not isinstance(f, list):
+        ec = v[f[:,:], :]
+        print(ec.shape)
+        centroid = np.squeeze(np.mean(ec, axis=1))
+    else:
+        length_f = len(f)
+        centroid = np.zeros((length_f, v.shape[1]))
+        try:
+            for i in range(length_f):
+                fc = f[i]
+                if fc:  # need to set centroid to NaN if fc is empty?
+                    vlist = fc[0]
+                    centroid[i, :] = np.mean(v[vlist[~np.isnan(vlist)], :], axis=0)             # Note to Ed check if this is functioning correctly
+        except Exception as e:
+            raise ValueError('malformed face cell array') from e
+    return centroid
+
+#_________________________________________________________________________________________________________
 
 def varargin2struct(*args):
     opt = {}
@@ -402,6 +445,8 @@ def varargin2struct(*args):
         i += 1
 
     return opt
+
+#_________________________________________________________________________________________________________
 
 def jsonopt(key, default, *args):
     val = default
