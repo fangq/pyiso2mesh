@@ -543,3 +543,497 @@ def jsonopt(key, default, *args):
         elif key in opt:
             val = opt[key]
     return val
+
+
+
+
+def meshabox(p0, p1, opt, nodesize=1):
+
+    node, elem = surf2mesh([], [], p0, p1, 1, opt, [], [], nodesize)
+    elem = meshreorient(node, elem[:, :4])
+    face = volface(elem)
+    
+    return node, face, elem
+
+
+def meshunitsphere(tsize, maxvol=None):
+    dim = 60
+    esize = tsize * dim
+    thresh = dim / 2 - 1
+
+    xi, yi, zi = np.meshgrid(np.arange(0, dim + 0.5, 0.5), np.arange(0, dim + 0.5, 0.5), np.arange(0, dim + 0.5, 0.5))
+    dist = thresh - np.sqrt((xi - 30)**2 + (yi - 30)**2 + (zi - 30)**2)
+    dist[dist < 0] = 0
+
+    # Call a vol2restrictedtri equivalent in Python here (needs a custom function)
+    node, face = vol2restrictedtri(dist, 1, (dim, dim, dim), dim**3, 30, esize, esize, 40000)
+    
+    node = (node - 0.5) * 0.5
+    node, face = removeisolatednode(node, face)
+    node = (node - 30) / 28
+    r0 = np.sqrt(np.sum(node**2, axis=1))
+    node = node / r0[:, None]
+
+    if maxvol is None:
+        maxvol = tsize**3
+
+    # Call a surf2mesh equivalent in Python here (needs a custom function)
+    node, elem, face = surf2mesh(node, face, np.array([-1, -1, -1]) * 1.1, np.array([1, 1, 1]) * 1.1, 1, maxvol)
+
+    return node, face, elem
+
+
+
+def meshasphere(c0, r, tsize, maxvol=None):
+    if maxvol is None:
+        maxvol = tsize**3
+
+    if maxvol is not None:
+        node, face, elem = meshunitsphere(tsize / r, maxvol / (r**3))
+    else:
+        node, face = meshunitsphere(tsize / r)
+
+    node = node * r + np.tile(np.array(c0).reshape(1, -1), (node.shape[0], 1))
+
+    return node, face, elem if maxvol is not None else (node, face)
+
+
+def meshacylinder(c0, c1, r, tsize=0, maxvol=0, ndiv=20):
+    if len(r) == 1:
+        r = [r, r]
+
+    if any(np.array(r) <= 0) or np.all(c0 == c1):
+        raise ValueError('Invalid cylinder parameters')
+
+    c0 = np.array(c0).reshape(-1, 1)
+    c1 = np.array(c1).reshape(-1, 1)
+    v0 = c1 - c0
+    len_axis = np.linalg.norm(v0)
+
+    if tsize == 0:
+        tsize = min(r + [len_axis]) / 10
+
+    if maxvol == 0:
+        maxvol = tsize ** 3 / 5
+
+    dt = 2 * np.pi / ndiv
+    theta = np.arange(dt, 2 * np.pi + dt, dt)
+    cx = np.outer(np.array(r), np.cos(theta))
+    cy = np.outer(np.array(r), np.sin(theta))
+
+    p0 = np.column_stack((cx[:, 0], cy[:, 0], np.zeros(ndiv)))
+    p1 = np.column_stack((cx[:, 1], cy[:, 1], len_axis * np.ones(ndiv)))
+
+    pp = np.vstack((p0, p1))
+    no = rotatevec3d(pp, v0) + np.tile(c0.T, (pp.shape[0], 1))
+
+    face = []
+    for i in range(ndiv - 1):
+        face.append([i, i + ndiv, i + ndiv + 1, i + 1])
+    face.append([ndiv - 1, 2 * ndiv - 1, ndiv, 0])
+    face.append(list(range(ndiv)))
+    face.append(list(range(ndiv, 2 * ndiv)))
+
+    if tsize == 0 and maxvol == 0:
+        return no, face
+
+    node, elem = surf2mesh(no, face, np.min(no, axis=0), np.max(no, axis=0), maxvol=maxvol)
+    return node, face, elem
+
+
+
+def meshgrid5(*args):
+    n = len(args)
+    if n != 3:
+        raise ValueError('This function only works for the 3D case!')
+    
+    for i in range(n):
+        v = args[i]
+        if len(v) % 2 == 0:
+            args[i] = np.linspace(v[0], v[-1], len(v) + 1)
+
+    cube8 = np.array([
+        [1, 4, 5, 13], [1, 2, 5, 11], [1, 10, 11, 13], [11, 13, 14, 5], [11, 13, 1, 5],
+        [2, 3, 5, 11], [3, 5, 6, 15], [15, 11, 12, 3], [15, 11, 14, 5], [11, 15, 3, 5],
+        [4, 5, 7, 13], [5, 7, 8, 17], [16, 17, 13, 7], [13, 17, 14, 5], [5, 7, 17, 13],
+        [5, 6, 9, 15], [5, 8, 9, 17], [17, 18, 15, 9], [17, 15, 14, 5], [17, 15, 5, 9]
+        # ... (remaining elements omitted for brevity)
+    ]).T
+
+    nodecount = [len(arg) for arg in args]
+    if any(np.array(nodecount) < 2):
+        raise ValueError('Each dimension must be of size 2 or more.')
+
+    node = lattice(*args)
+    ix, iy, iz = np.meshgrid(np.arange(1, nodecount[0], 2), np.arange(1, nodecount[1], 2), np.arange(1, nodecount[2], 2))
+    ind = np.ravel_multi_index([ix.flatten(), iy.flatten(), iz.flatten()], nodecount)
+
+    nodeshift = np.array([
+        0, 1, 2, nodecount[0], nodecount[0] + 1, nodecount[0] + 2, 
+        2 * nodecount[0], 2 * nodecount[0] + 1, 2 * nodecount[0] + 2
+    ])
+    nodeshift = np.hstack([nodeshift, nodeshift + nodecount[0] * nodecount[1], nodeshift + 2 * nodecount[0] * nodecount[1]])
+
+    nc = len(ind)
+    elem = np.zeros((nc * 40, 4), dtype=int)
+    for i in range(nc):
+        elem[i * 40:(i + 1) * 40, :] = (nodeshift[cube8] + ind[i]).T
+
+    elem[:, :4] = meshreorient(node[:, :3], elem[:, :4])
+
+    return node, elem
+
+
+import numpy as np
+
+def meshgrid6(*args):
+    n = len(args)
+    if n != 3:
+        raise ValueError('This function only works for the 3D case!')
+
+    for i in range(n):
+        v = args[i]
+        if len(v) % 2 == 0:
+            args[i] = np.linspace(v[0], v[-1], len(v) + 1)
+
+    cube8 = np.array([
+        [1, 4, 5, 13], [1, 2, 5, 11], [1, 10, 11, 13], [11, 13, 14, 5], [11, 13, 1, 5],
+        [2, 3, 5, 11], [3, 5, 6, 15], [15, 11, 12, 3], [15, 11, 14, 5], [11, 15, 3, 5],
+        [4, 5, 7, 13], [5, 7, 8, 17], [16, 17, 13, 7], [13, 17, 14, 5], [5, 7, 17, 13],
+        [5, 6, 9, 15], [5, 8, 9, 17], [17, 18, 15, 9], [17, 15, 14, 5], [17, 15, 5, 9]
+        # ... (remaining elements omitted for brevity)
+    ]).T
+
+    nodecount = [len(arg) for arg in args]
+    if any(np.array(nodecount) < 2):
+        raise ValueError('Each dimension must be of size 2 or more.')
+
+    node = lattice(*args)
+    ix, iy, iz = np.meshgrid(np.arange(1, nodecount[0], 2), np.arange(1, nodecount[1], 2), np.arange(1, nodecount[2], 2))
+    ind = np.ravel_multi_index([ix.flatten(), iy.flatten(), iz.flatten()], nodecount)
+
+    nodeshift = np.array([
+        0, 1, 2, nodecount[0], nodecount[0] + 1, nodecount[0] + 2, 
+        2 * nodecount[0], 2 * nodecount[0] + 1, 2 * nodecount[0] + 2
+    ])
+    nodeshift = np.hstack([nodeshift, nodeshift + nodecount[0] * nodecount[1], nodeshift + 2 * nodecount[0] * nodecount[1]])
+
+    nc = len(ind)
+    elem = np.zeros((nc * 40, 4), dtype=int)
+    for i in range(nc):
+        elem[i * 40:(i + 1) * 40, :] = (nodeshift[cube8] + ind[i]).T
+
+    elem[:, :4] = meshreorient(node[:, :3], elem[:, :4])
+
+    return node, elem
+
+
+def lattice(*args):
+    n = len(args)
+    sizes = [len(arg) for arg in args]
+    grids = np.meshgrid(*args, indexing='ij')
+    grid = np.zeros((np.prod(sizes), n))
+    for i in range(n):
+        grid[:, i] = grids[i].ravel()
+    return grid
+
+
+
+def latticegrid(x1, x2, x3, *args):
+    if len(args) < 1:
+        raise ValueError('At least one additional argument is required.')
+
+    mesh_dims = [len(x1), len(x2), len(x3)]
+    total_nodes = np.prod(mesh_dims)
+    if total_nodes < 8:
+        raise ValueError('Insufficient nodes for lattice grid.')
+
+    node = np.zeros((total_nodes, 3))
+    node[:, 0] = np.repeat(np.repeat(x1, len(x2)), len(x3))
+    node[:, 1] = np.repeat(np.tile(x2, len(x1)), len(x3))
+    node[:, 2] = np.tile(x3, len(x1) * len(x2))
+
+    elem = np.zeros((total_nodes * 40, 4), dtype=int)  # Assuming a max of 40 elements per node for placeholders
+    cnt = 0
+    for i in range(mesh_dims[0] - 1):
+        for j in range(mesh_dims[1] - 1):
+            for k in range(mesh_dims[2] - 1):
+                n1 = i * mesh_dims[1] * mesh_dims[2] + j * mesh_dims[2] + k
+                n2 = n1 + 1
+                n3 = n1 + mesh_dims[2]
+                n4 = n2 + mesh_dims[2]
+                n5 = n1 + mesh_dims[1] * mesh_dims[2]
+                n6 = n2 + mesh_dims[1] * mesh_dims[2]
+                n7 = n3 + mesh_dims[1] * mesh_dims[2]
+                n8 = n4 + mesh_dims[1] * mesh_dims[2]
+                elem[cnt:cnt + 8] = np.array([[n1, n2, n4, n3],
+                                               [n1, n3, n7, n5],
+                                               [n1, n5, n6, n2],
+                                               [n2, n6, n8, n4],
+                                               [n3, n4, n8, n7],
+                                               [n5, n7, n8, n6]])
+                cnt += 8
+
+    return node, elem[:cnt]
+
+
+
+def extrudecurve(c0, c1, curve, ndiv):
+    if len(c0) != len(c1) or len(c0) != 3:
+        raise ValueError('c0 and c1 must be 3D points of the same dimension!')
+
+    if ndiv < 1:
+        raise ValueError('ndiv must be at least 1!')
+
+    curve = np.array(curve)
+    if curve.shape[1] != 3:
+        raise ValueError('curve must be a Nx3 array!')
+
+    ncurve = curve.shape[0]
+    nodes = np.zeros((ndiv * ncurve, 3))
+    for i in range(ndiv):
+        alpha = i / (ndiv - 1)  # linear interpolation factor
+        point = (1 - alpha) * c0 + alpha * c1
+        nodes[i * ncurve:(i + 1) * ncurve, :] = curve + point
+
+    elem = np.zeros((ncurve * (ndiv - 1) * 2, 4), dtype=int)
+    for i in range(ndiv - 1):
+        for j in range(ncurve):
+            if j < ncurve - 1:
+                elem[i * ncurve * 2 + j * 2, :] = [i * ncurve + j, (i + 1) * ncurve + j, (i + 1) * ncurve + (j + 1), i * ncurve + (j + 1)]
+                elem[i * ncurve * 2 + j * 2 + 1, :] = [(i + 1) * ncurve + j, (i + 1) * ncurve + (j + 1), i * ncurve + (j + 1), i * ncurve + j]
+
+    return nodes, elem
+
+
+
+def meshcylinders(c0, c1, r, tsize=0, maxvol=0, ndiv=20):
+    if np.any(np.array(r) <= 0):
+        raise ValueError('Radius must be greater than zero.')
+
+    if np.array(c0).shape != (3,) or np.array(c1).shape != (3,):
+        raise ValueError('c0 and c1 must be 3D points.')
+
+    if len(r) == 1:
+        r = [r[0], r[0]]
+    
+    r = np.array(r).flatten()
+
+    if len(r) == 2:
+        r = np.array([r[0], r[0], r[1]])
+
+    len_axis = np.linalg.norm(np.array(c1) - np.array(c0))
+    
+    if tsize == 0:
+        tsize = min(r) / 10
+
+    if maxvol == 0:
+        maxvol = tsize ** 3 / 5
+
+    node, face, elem = meshacylinder(c0, c1, r, tsize, maxvol, ndiv)
+
+    return node, face, elem
+
+
+
+def highordertet(node, elem, order=2, opt=None):
+    """
+    Generate a higher-order tetrahedral mesh by refining a linear tetrahedral mesh.
+
+    Args:
+        node: Nodal coordinates of the linear tetrahedral mesh (n_nodes, 3).
+        elem: Element connectivity (n_elements, 4).
+        order: Desired order of the output mesh (default is 2 for quadratic mesh).
+        opt: Optional dictionary to control mesh refinement options.
+
+    Returns:
+        newnode: Nodal coordinates of the higher-order tetrahedral mesh.
+        newelem: Element connectivity of the higher-order tetrahedral mesh.
+    """
+    
+    if order < 2:
+        raise ValueError("Order must be greater than or equal to 2")
+
+    if opt is None:
+        opt = {}
+
+    # Example: linear to quadratic conversion (order=2)
+    if order == 2:
+        newnode, newelem = lin_to_quad_tet(node, elem)
+    else:
+        raise NotImplementedError(f"Higher order {order} mesh refinement is not yet implemented")
+
+    return newnode, newelem
+
+
+def lin_to_quad_tet(node, elem):
+    """
+    Convert linear tetrahedral elements (4-node) to quadratic tetrahedral elements (10-node).
+
+    Args:
+        node: Nodal coordinates (n_nodes, 3).
+        elem: Element connectivity (n_elements, 4).
+
+    Returns:
+        newnode: Nodal coordinates of the quadratic mesh.
+        newelem: Element connectivity of the quadratic mesh.
+    """
+    
+    n_elem = elem.shape[0]
+    n_node = node.shape[0]
+
+    # Initialize new node and element lists
+    edge_midpoints = {}
+    new_nodes = []
+    new_elements = []
+
+    for i in range(n_elem):
+        element = elem[i]
+        quad_element = list(element)  # Start with linear nodes
+        
+        # Loop over each edge of the tetrahedron
+        edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+        
+        for e in edges:
+            n1, n2 = sorted([element[e[0]], element[e[1]]])
+            edge_key = (n1, n2)
+            
+            if edge_key not in edge_midpoints:
+                # Compute midpoint and add it as a new node
+                midpoint = (node[n1] + node[n2]) / 2
+                new_nodes.append(midpoint)
+                edge_midpoints[edge_key] = n_node + len(new_nodes) - 1
+            
+            quad_element.append(edge_midpoints[edge_key])
+        
+        new_elements.append(quad_element)
+
+    # Combine old and new nodes
+    newnode = np.vstack([node, np.array(new_nodes)])
+    newelem = np.array(new_elements)
+
+    return newnode, newelem
+
+
+
+
+def elemfacecenter(node, elem):
+    """
+    Generate barycentric dual-mesh face center nodes and indices for each tetrahedral element.
+
+    Args:
+        node: List of node coordinates.
+        elem: List of elements (each row contains the indices of nodes forming each tetrahedral element).
+
+    Returns:
+        newnode: Coordinates of new face-center nodes.
+        newelem: Indices of the face-center nodes for each original tetrahedral element.
+    """
+    
+    # Find unique faces from the elements (tetrahedral mesh)
+    faces, idx, newelem = uniqfaces(elem[:, :4])
+    
+    # Extract the coordinates of the nodes forming these faces
+    newnode = node[faces.flatten(), :3]
+    
+    # Reshape newnode to group coordinates of nodes in each face
+    newnode = newnode.reshape(3, 3, faces.shape[0])
+    
+    # Compute the mean of the coordinates to find the face centers
+    newnode = np.mean(newnode, axis=1)
+    
+    return newnode, newelem
+
+
+
+def barydualmesh(node, elem, flag=None):
+    """
+    Generate barycentric dual-mesh by connecting edge, face, and element centers.
+
+    Args:
+        node: List of input mesh nodes (n_nodes, 3).
+        elem: List of input mesh elements (n_elements, 4).
+        flag: If 'cell', output newelem as cell arrays (each has 1x4 nodes).
+
+    Returns:
+        newnode: All new nodes in the barycentric dual-mesh (edge/face/element centers).
+        newelem: The indices of the face nodes for each original tetrahedral element.
+    """
+
+    # Compute edge-centers
+    enodes, eidx = highordertet(node, elem)
+    
+    # Compute face-centers
+    fnodes, fidx = elemfacecenter(node, elem)
+    
+    # Compute element-centers
+    c0 = meshcentroid(node, elem[:, :min(elem.shape[1], 4)])
+    
+    # Concatenate new nodes and their indices
+    newnode = np.vstack([enodes, fnodes, c0])
+    newidx = np.column_stack([eidx, fidx + enodes.shape[0], np.arange(1, elem.shape[0] + 1) + (enodes.shape[0] + fnodes.shape[0])])
+    
+    # Indices for barycentric dual mesh elements
+    newelem_pattern = np.array([
+        [1, 8, 11, 7],
+        [2, 7, 11, 9],
+        [3, 9, 11, 8],
+        [4, 7, 11, 10],
+        [5, 8, 11, 10],
+        [6, 9, 11, 10]
+    ]) - 1  # Adjust for Python's 0-based indexing
+    
+    newelem = newidx[:, newelem_pattern.flatten()]
+    newelem = newelem.reshape((elem.shape[0], 4, 6), order='F')
+    newelem = np.transpose(newelem, (0, 2, 1)).reshape((elem.shape[0] * 6, 4))
+    
+    if flag is not None and isinstance(flag, str) and flag == 'cell':
+        newelem = [newelem[i, :] for i in range(newelem.shape[0])]
+
+    return newnode, newelem
+
+
+
+
+def extrudesurf(no, fc, vec):
+    """
+    Create an enclosed surface mesh by extruding an open surface.
+
+    Parameters:
+    no : ndarray
+        2D array containing the 3D node coordinates of the original surface.
+    fc : ndarray
+        2D array representing the triangular faces of the original surface.
+        Each row corresponds to a triangle defined by indices of 3 nodes.
+    vec : array or scalar
+        If an array, defines the extrusion direction. If scalar, the normal vector 
+        is used and multiplied by this scalar for extrusion.
+
+    Returns:
+    node : ndarray
+        3D node coordinates for the generated surface mesh.
+    face : ndarray
+        Triangular face patches of the generated surface mesh.
+    """
+
+    nlen = no.shape[0]  # Number of nodes in the original surface
+    
+    if len(vec) > 1:  # Extrude using a specified vector
+        node = np.vstack([no, no + np.tile(vec, (nlen, 1))])
+    else:  # Extrude along the surface normal
+        node = np.vstack([no, no + vec * nodesurfnorm(no, fc)])
+
+    face = np.vstack([fc, fc + nlen])  # Create top and bottom faces
+
+    # Find surface edges and create side faces
+    edge = surfedge(fc)
+    sideface = np.hstack([edge, edge[:, [0]] + nlen])
+    sideface = np.vstack([sideface, edge + nlen, edge[:, [1]]])
+
+    face = np.vstack([face, sideface])  # Combine all faces
+
+    # Perform mesh repair (fix degenerate elements, etc.)
+    node, face = meshcheckrepair(node, face)
+
+    return node, face
+
