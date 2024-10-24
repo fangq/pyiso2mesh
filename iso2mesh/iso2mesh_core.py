@@ -1014,77 +1014,96 @@ def qmeshcut(elem, node, value, cutat):
     return cutpos, cutvalue, facedata, elemid, nodeid
 
 
-def meshcheckrepair(node, elem, opt="dupnode", **kwargs):
+def meshcheckrepair(node, elem, opt=None, *args):
     """
     Check and repair a surface mesh.
 
     Parameters:
-    node: input/output, surface node list, shape (nn, 3)
-    elem: input/output, surface face element list, shape (be, 3)
-    opt: options, including:
-        'dupnode': remove duplicated nodes
-        'dupelem' or 'duplicated': remove duplicated elements
-        'dup': perform both above
-        'isolated': remove isolated nodes
-        'open': abort if an open surface is found
-        'deep': remove non-manifold vertices using external tools
-        'meshfix': repair a closed surface using meshfix utility
-        'intersect': test for self-intersecting elements
-    kwargs: additional options
+    node : ndarray
+        Input/output, surface node list (nn x 3).
+    elem : ndarray
+        Input/output, surface face element list (be x 3).
+    opt : str, optional
+        Options include:
+            'dupnode'   : Remove duplicated nodes.
+            'dupelem'   : Remove duplicated elements.
+            'dup'       : Both remove duplicated nodes and elements.
+            'isolated'  : Remove isolated nodes.
+            'open'      : Abort if open surface is found.
+            'deep'      : Call external jmeshlib to remove non-manifold vertices.
+            'meshfix'   : Repair closed surface using meshfix (removes self-intersecting elements, fills holes).
+            'intersect' : Test for self-intersecting elements.
 
     Returns:
-    node: repaired node list
-    elem: repaired face element list
+    node : ndarray
+        Repaired node list.
+    elem : ndarray
+        Repaired element list.
     """
 
-    extra = kwargs
+    extra = dict(*args)
 
-    if opt in ["dupnode", "dup"]:
+    if opt in (None, "dupnode", "dup"):
         l1 = node.shape[0]
-        node, elem = removedupnodes(node, elem, tolerance=extra.get("Tolerance", 0))
+        node, elem = removedupnodes(node, elem, extra.get("Tolerance", 0))
         l2 = node.shape[0]
         if l2 != l1:
             print(f"{l1 - l2} duplicated nodes were removed")
 
-    if opt in ["duplicated", "dupelem", "dup"]:
+    if opt in (None, "duplicated", "dupelem", "dup"):
         l1 = elem.shape[0]
         elem = removedupelem(elem)
         l2 = elem.shape[0]
         if l2 != l1:
             print(f"{l1 - l2} duplicated elements were removed")
 
-    if opt == "isolated":
-        l1 = node.shape[0]
+    if opt in (None, "isolated"):
+        l1 = len(node)
         node, elem = removeisolatednode(node, elem)
-        l2 = node.shape[0]
+        l2 = len(node)
         if l2 != l1:
             print(f"{l1 - l2} isolated nodes were removed")
 
     if opt == "open":
         eg = surfedge(elem)
-        if len(eg) > 0:
+        if eg:
             raise ValueError(
                 "Open surface found. You need to enclose it by padding zeros around the volume."
             )
 
-    if opt == "deep":
-        # Call external tool like jmeshlib to clean non-manifold vertices
-        run_external_meshcleaner("jmeshlib", node, elem, extra)
+    if opt in (None, "deep"):
+        exesuff = fallbackexeext(getexeext(), "jmeshlib")
+        deletemeshfile(mwpath("post_sclean.off"))
+        saveoff(node[:, :3], elem[:, :3], mwpath("pre_sclean.off"))
+        status, output = subprocess.getstatusoutput(
+            f'"{mcpath("jmeshlib")}{exesuff}" "{mwpath("pre_sclean.off")}" "{mwpath("post_sclean.off")}"'
+        )
+        if status:
+            raise RuntimeError(f"jmeshlib command failed: {output}")
+        node, elem = readoff(mwpath("post_sclean.off"))
 
     if opt == "meshfix":
-        # Call meshfix to repair the surface
-        run_external_meshcleaner(
-            "meshfix",
-            node,
-            elem,
-            extra,
-            meshfix_param=extra.get("MeshfixParam", "-q -a 0.01"),
+        exesuff = fallbackexeext(getexeext(), "meshfix")
+        moreopt = extra.get("MeshfixParam", " -q -a 0.01 ")
+        deletemeshfile(mwpath("pre_sclean.off"))
+        deletemeshfile(mwpath("pre_sclean_fixed.off"))
+        saveoff(node, elem, mwpath("pre_sclean.off"))
+        status = subprocess.call(
+            f'"{mcpath("meshfix")}{exesuff}" "{mwpath("pre_sclean.off")}" {moreopt}',
+            shell=True,
         )
+        if status:
+            raise RuntimeError("meshfix command failed")
+        node, elem = readoff(mwpath("pre_sclean_fixed.off"))
 
     if opt == "intersect":
-        # Test for intersecting elements
-        run_external_meshcleaner(
-            "meshfix", node, elem, extra, moreopt=" -q --no-clean --intersect"
+        moreopt = f' -q --no-clean --intersect -o "{mwpath("pre_sclean_inter.msh")}"'
+        deletemeshfile(mwpath("pre_sclean.off"))
+        deletemeshfile(mwpath("pre_sclean_inter.msh"))
+        saveoff(node, elem, mwpath("pre_sclean.off"))
+        subprocess.call(
+            f'"{mcpath("meshfix")}{exesuff}" "{mwpath("pre_sclean.off")}" {moreopt}',
+            shell=True,
         )
 
     return node, elem
@@ -1092,49 +1111,62 @@ def meshcheckrepair(node, elem, opt="dupnode", **kwargs):
 
 def removedupelem(elem):
     """
-    Removes duplicated (folded) elements from the element list.
+    Remove doubly duplicated (folded) elements from the element list.
 
-    Args:
-    elem: List of elements (each row contains indices of nodes for an element).
+    Parameters:
+    elem : ndarray
+        List of elements (node indices).
 
     Returns:
-    elem: Element list after removing duplicated elements.
+    elem : ndarray
+        Element list after removing the duplicated elements.
     """
-    # Sort each element row-wise and find unique rows
+
+    # Sort elements and remove duplicates (folded elements)
     sorted_elem = np.sort(elem, axis=1)
-    _, unique_indices, counts = np.unique(
+
+    # Find unique rows and their indices
+    _, idx, counts = np.unique(
         sorted_elem, axis=0, return_index=True, return_counts=True
     )
 
-    # Remove elements that appear an even number of times (i.e., duplicates)
-    bins = np.bincount(counts)
+    # Histogram of element occurrences
+    bins = np.bincount(counts, minlength=elem.shape[0])
+
+    # Elements that are duplicated and their indices
     cc = bins[counts]
-    elem = elem[cc == 1]
+
+    # Remove folded elements
+    elem = np.delete(elem, np.where((cc > 0) & (cc % 2 == 0)), axis=0)
 
     return elem
 
 
 def removedupnodes(node, elem, tol=0):
     """
-    Removes duplicate nodes from a mesh and adjusts the element indices accordingly.
+    Remove duplicated nodes from a mesh.
 
-    Args:
-    node: Node coordinates, a 2D array with each row as (x, y, z).
-    elem: Element connectivity, integer array with each row containing node indices.
-    tol: Tolerance for considering nodes as duplicates.
+    Parameters:
+    node : ndarray
+        Node coordinates, with 3 columns for x, y, and z respectively.
+    elem : ndarray or list
+        Element list where each row contains the indices of nodes for each tetrahedron.
+    tol : float, optional
+        Tolerance for considering nodes as duplicates. Default is 0 (no tolerance).
 
     Returns:
-    newnode: Nodes without duplicates.
-    newelem: Elements with updated node indices.
+    newnode : ndarray
+        Node list without duplicates.
+    newelem : ndarray or list
+        Element list with only unique nodes.
     """
-    # Apply tolerance if specified
+
     if tol != 0:
         node = np.round(node / tol) * tol
 
-    # Find unique nodes and indices
+    # Find unique rows (nodes) and map them back to elements
     newnode, I, J = np.unique(node, axis=0, return_index=True, return_inverse=True)
 
-    # Update element connectivity
     if isinstance(elem, list):
         newelem = [J[e] for e in elem]
     else:
@@ -1145,49 +1177,56 @@ def removedupnodes(node, elem, tol=0):
 
 def removeisolatednode(node, elem, face=None):
     """
-    Removes isolated nodes that are not included in any element.
+    Remove isolated nodes: nodes that are not included in any element.
 
-    Args:
-    node: Node coordinates, a 2D array.
-    elem: Element connectivity, array or cell array (list of arrays).
-    face: (optional) Surface face list.
+    Parameters:
+    node : ndarray
+        List of node coordinates.
+    elem : ndarray or list
+        List of elements of the mesh, can be a regular array or a list for PLCs (piecewise linear complexes).
+    face : ndarray or list, optional
+        List of triangular surface faces.
 
     Returns:
-    no: Node coordinates after removing isolated nodes.
-    el: Element connectivity after re-indexing.
-    fa: (optional) Face list after re-indexing.
+    no : ndarray
+        Node coordinates after removing the isolated nodes.
+    el : ndarray or list
+        Element list of the resulting mesh.
+    fa : ndarray or list, optional
+        Face list of the resulting mesh.
     """
-    oid = np.arange(node.shape[0])  # old node index
+
+    oid = np.arange(node.shape[0])  # Old node indices
 
     if not isinstance(elem, list):
-        idx = np.setdiff1d(oid, np.unique(elem))
+        idx = np.setdiff1d(oid, elem.ravel())  # Indices of isolated nodes
     else:
         el = np.concatenate(elem)
-        idx = np.setdiff1d(oid, np.unique(el))
+        idx = np.setdiff1d(oid, el)
 
     idx = np.sort(idx)
-    delta = np.zeros(oid.shape)
+    delta = np.zeros_like(oid)
     delta[idx] = 1
-    delta = -np.cumsum(delta)
+    delta = -np.cumsum(
+        delta
+    )  # Calculate the new node index after removal of isolated nodes
 
-    # Map to new indices
-    oid = oid + delta
+    oid = oid + delta  # Map to new index
 
     if not isinstance(elem, list):
-        el = oid[elem]
+        el = oid[elem]  # Update element list with new indices
     else:
         el = [oid[e] for e in elem]
 
     if face is not None:
         if not isinstance(face, list):
-            fa = oid[face]
+            fa = oid[face]  # Update face list with new indices
         else:
             fa = [oid[f] for f in face]
     else:
         fa = None
 
-    # Remove isolated nodes
-    no = np.delete(node, idx, axis=0)
+    no = np.delete(node, idx, axis=0)  # Remove isolated nodes
 
     return no, el, fa
 
@@ -1836,3 +1875,74 @@ def mwpath(fname=""):
         tempname = os.path.join(p, session, fname)
 
     return tempname
+
+
+def vol2restrictedtri(vol, thres, cent, brad, ang, radbound, distbound, maxnode):
+    """
+    Surface mesh extraction using CGAL mesher.
+
+    Parameters:
+    vol : ndarray
+        3D volumetric image.
+    thres : float
+        Threshold for extraction.
+    cent : tuple
+        A 3D position (x, y, z) inside the resulting mesh.
+    brad : float
+        Maximum bounding sphere squared of the resulting mesh.
+    ang : float
+        Minimum angular constraint for triangular elements (degrees).
+    radbound : float
+        Maximum triangle Delaunay circle radius.
+    distbound : float
+        Maximum Delaunay sphere distances.
+    maxnode : int
+        Maximum number of surface nodes.
+
+    Returns:
+    node : ndarray
+        List of 3D nodes (x, y, z) in the resulting surface.
+    elem : ndarray
+        Element list of the resulting mesh (3 columns of integers).
+    """
+
+    if radbound < 1:
+        print(
+            "You are meshing the surface with sub-pixel size. Check if opt.radbound is set correctly."
+        )
+
+    exesuff = fallbackexeext(getexeext(), "cgalsurf")
+
+    # Save the input volume in .inr format
+    saveinr(vol, mwpath("pre_extract.inr"))
+
+    # Delete previous output mesh file if exists
+    deletemeshfile(mwpath("post_extract.off"))
+
+    # Random seed
+    randseed = os.getenv("ISO2MESH_SESSION", int("623F9A9E", 16))
+
+    initnum = os.getenv("ISO2MESH_INITSIZE", 50)
+
+    # Build the system command to run CGAL mesher
+    cmd = (
+        f'"{mcpath("cgalsurf")}{exesuff}" "{mwpath("pre_extract.inr")}" '
+        f"{thres:.16f} {cent[0]:.16f} {cent[1]:.16f} {cent[2]:.16f} {brad:.16f} {ang:.16f} {radbound:.16f} "
+        f'{distbound:.16f} {maxnode} "{mwpath("post_extract.off")}" {randseed} {initnum}'
+    )
+
+    # Execute the system command
+    status = subprocess.call(cmd, shell=True)
+    if status != 0:
+        raise RuntimeError(f"CGAL mesher failed with command: {cmd}")
+
+    # Read the resulting mesh
+    node, elem = readoff(mwpath("post_extract.off"))
+
+    # Check and repair mesh if needed
+    node, elem = meshcheckrepair(node, elem)
+
+    # Assuming the origin [0, 0, 0] is located at the lower-bottom corner of the image
+    node += 0.5
+
+    return node, elem
