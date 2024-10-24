@@ -296,3 +296,46 @@ def savebinstl(node, elem, fname, solidname=""):
                     fid.write(struct.pack("<3f", *node[elem[i, j], :]))
                 # Attribute byte count (set to 0)
                 fid.write(struct.pack("<H", 0))
+
+
+def readmedit(filename):
+    """
+    Read a Medit mesh format file.
+
+    Parameters:
+    filename : str
+        Name of the Medit data file.
+
+    Returns:
+    node : ndarray
+        Node coordinates of the mesh.
+    elem : ndarray
+        List of elements of the mesh (tetrahedra).
+    face : ndarray
+        List of surface triangles of the mesh.
+    """
+
+    node = []
+    elem = []
+    face = []
+
+    with open(filename, "r") as fid:
+        while True:
+            key = fid.readline().strip()
+            if key == "End":
+                break
+            val = int(fid.readline().strip())
+
+            if key == "Vertices":
+                node_data = np.fromfile(fid, dtype=np.float32, count=4 * val, sep=" ")
+                node = node_data.reshape((val, 4))
+
+            elif key == "Triangles":
+                face_data = np.fromfile(fid, dtype=np.int32, count=4 * val, sep=" ")
+                face = face_data.reshape((val, 4))
+
+            elif key == "Tetrahedra":
+                elem_data = np.fromfile(fid, dtype=np.int32, count=5 * val, sep=" ")
+                elem = elem_data.reshape((val, 5))
+
+    return node, elem, face

@@ -166,6 +166,30 @@ def s2v(node, face, div=50, *args):
     return img, v2smap
 
 
+def sms(node, face, iter=10, alpha=0.5, method="laplacianhc"):
+    """
+    Simplified version of surface mesh smoothing.
+
+    Parameters:
+    node: node coordinates of a surface mesh
+    face: face element list of the surface mesh
+    iter: smoothing iteration number (default is 10)
+    alpha: scaler, smoothing parameter, v(k+1)=alpha*v(k)+(1-alpha)*mean(neighbors) (default is 0.5)
+    method: smoothing method, same as in smoothsurf (default is 'laplacianhc')
+
+    Returns:
+    newnode: the smoothed node coordinates
+    """
+
+    # Compute mesh connectivity
+    conn = meshconn(face, node.shape[0])
+
+    # Smooth surface mesh nodes
+    newnode = smoothsurf(node[:, :3], None, conn, iter, alpha, method, alpha)
+
+    return newnode
+
+
 def vol2mesh(img, ix, iy, iz, opt, maxvol, dofix, method="cgalsurf", isovalues=None):
     """
     Convert a binary or multi-valued volume to a tetrahedral mesh.
@@ -210,77 +234,108 @@ def vol2mesh(img, ix, iy, iz, opt, maxvol, dofix, method="cgalsurf", isovalues=N
     return node, elem, face
 
 
-def vol2surf(img, ix, iy, iz, opt, dofix, method="cgalsurf", isovalues=None):
+def vol2surf(img, ix, iy, iz, opt, dofix=0, method="cgalsurf", isovalues=None):
     """
-    Convert a 3D volumetric image to surface meshes.
+    Convert a 3D volumetric image to surfaces.
 
     Parameters:
-    img       : 3D numpy array, binary or grayscale volumetric image
-    ix, iy, iz: subvolume selection indices in x, y, z directions
-    opt       : options for mesh generation (dict or scalar)
-    dofix     : boolean, whether to validate and repair the mesh
-    method    : method ('cgalsurf', 'simplify', 'cgalpoly', default 'cgalsurf')
-    isovalues : list of isovalues for levelsets (optional)
+    img: volumetric binary image. If img is empty, vol2surf will return user-defined surfaces via opt.surf if it exists.
+    ix, iy, iz: subvolume selection indices in x, y, z directions.
+    opt: options dict containing function parameters.
+    dofix: 1 to perform mesh validation and repair, 0 to skip repairing.
+    method: meshing method ('simplify', 'cgalsurf', or 'cgalpoly'), defaults to 'cgalsurf'.
+    isovalues: list of isovalues for level sets.
 
     Returns:
-    no        : node coordinates of the surface mesh
-    el        : element list of the surface mesh
-    regions   : list of interior points for closed surfaces
-    holes     : list of interior points for holes
+    no: node list on the resulting surface mesh, with 3 columns for x, y, z.
+    el: list of triangular elements on the surface [n1, n2, n3, region_id].
+    regions: list of interior points for all sub-regions.
+    holes: list of interior points for all holes.
     """
+
+    print("Extracting surfaces from a volume...")
+
     el = []
     no = []
     holes = opt.get("holes", [])
     regions = opt.get("regions", [])
 
-    if img is not None:
-        img = img[np.ix_(ix, iy, iz)]
+    if img is not None and len(img) > 0:
+        img = img[ix, iy, iz]
         dim = img.shape
         newdim = np.array(dim) + 2
-        newimg = np.zeros(newdim)
+        newimg = np.zeros(newdim, dtype=img.dtype)
         newimg[1:-1, 1:-1, 1:-1] = img
 
         if isovalues is None:
-            maxlevel = int(np.max(newimg))
+            maxlevel = newimg.max()
             isovalues = np.arange(1, maxlevel + 1)
         else:
             isovalues = np.unique(np.sort(isovalues))
             maxlevel = len(isovalues)
 
         for i in range(maxlevel):
-            levelmask = (
-                (newimg >= isovalues[i])
-                if i == maxlevel - 1
-                else (newimg >= isovalues[i]) & (newimg < isovalues[i + 1])
-            )
-            levelno, levelel = binsurface(levelmask.astype(np.int8))
+            if i < maxlevel - 1:
+                levelmask = (newimg >= isovalues[i]) & (newimg < isovalues[i + 1])
+            else:
+                levelmask = newimg >= isovalues[i]
+
+            levelno, levelel = binsurface(levelmask)
 
             if levelel.size > 0:
-                seeds = (
-                    surfinterior(levelno, levelel)
-                    if not opt.get("autoregion", False)
-                    else surfinterior(levelno, levelel)
-                )
-                if len(seeds) > 0:
-                    regions = np.vstack([regions, seeds]) if regions != [] else seeds
+                if opt.get("autoregion", 0):
+                    seeds = surfseeds(levelno, levelel)
+                else:
+                    seeds = surfinterior(levelno, levelel)
+
+                if seeds.size > 0:
+                    print(f"Region {i + 1} centroid: {seeds}")
+                    regions = np.vstack((regions, seeds)) if len(regions) > 0 else seeds
 
         for i in range(maxlevel):
+            print(f"Processing threshold level {i + 1}...")
             if method == "simplify":
                 v0, f0 = binsurface(newimg >= isovalues[i])
                 if dofix:
                     v0, f0 = meshcheckrepair(v0, f0)
-                keepratio = opt.get(i, {}).get("keepratio", opt.get("keepratio", opt))
+
+                keepratio = (
+                    opt.get("keepratio", 1)
+                    if len(opt) == 1
+                    else opt[i].get("keepratio", 1)
+                )
+                print(f"Resampling surface mesh for level {i + 1}...")
                 v0, f0 = meshresample(v0, f0, keepratio)
                 f0 = removeisolatedsurf(v0, f0, 3)
+
                 if dofix:
                     v0, f0 = meshcheckrepair(v0, f0)
             else:
-                radbound = opt.get(i, {}).get("radbound", opt.get("radbound", opt))
-                distbound = opt.get(i, {}).get("distbound", radbound)
-                surfside = opt.get(i, {}).get("side", "")
-                maxsurfnode = opt.get(i, {}).get("maxnode", 40000)
+                radbound = (
+                    opt.get("radbound", 1)
+                    if len(opt) == 1
+                    else opt[i].get("radbound", 1)
+                )
+                distbound = (
+                    opt.get("distbound", radbound)
+                    if len(opt) == 1
+                    else opt[i].get("distbound", radbound)
+                )
+                maxsurfnode = (
+                    opt.get("maxnode", 40000)
+                    if len(opt) == 1
+                    else opt[i].get("maxnode", 40000)
+                )
+                surfside = (
+                    opt.get("side", "") if len(opt) == 1 else opt[i].get("side", "")
+                )
 
-                perturb = 1e-4 * abs(np.max(isovalues))
+                if surfside == "upper":
+                    newimg[newimg <= isovalues[i] - 1e-9] = isovalues[i] - 1e-9
+                elif surfside == "lower":
+                    newimg[newimg >= isovalues[i] + 1e-9] = isovalues[i] + 1e-9
+
+                perturb = 1e-4 * np.abs(isovalues).max()
                 perturb = (
                     -perturb if np.all(newimg > isovalues[i] - perturb) else perturb
                 )
@@ -288,7 +343,7 @@ def vol2surf(img, ix, iy, iz, opt, dofix, method="cgalsurf", isovalues=None):
                 v0, f0 = vol2restrictedtri(
                     newimg,
                     isovalues[i] - perturb,
-                    regions[i, :],
+                    regions[i],
                     np.sum(newdim**2) * 2,
                     30,
                     radbound,
@@ -296,33 +351,29 @@ def vol2surf(img, ix, iy, iz, opt, dofix, method="cgalsurf", isovalues=None):
                     maxsurfnode,
                 )
 
-            if el == []:
-                el = np.hstack([f0, (i + 1) * np.ones((f0.shape[0], 1), dtype=int)])
-                no = v0
-            else:
-                el = np.vstack(
-                    [
-                        el,
-                        np.hstack(
-                            [
-                                f0 + len(no),
-                                (i + 1) * np.ones((f0.shape[0], 1), dtype=int),
-                            ]
-                        ),
-                    ]
-                )
-                no = np.vstack([no, v0])
+            if opt.get("maxsurf", 0) == 1:
+                f0 = maxsurf(finddisconnsurf(f0))
 
-        no[:, 0:3] -= 1
-        no[:, 0] = no[:, 0] * (np.max(ix) - np.min(ix) + 1) / dim[0] + (np.min(ix) - 1)
-        no[:, 1] = no[:, 1] * (np.max(iy) - np.min(iy) + 1) / dim[1] + (np.min(iy) - 1)
-        no[:, 2] = no[:, 2] * (np.max(iz) - np.min(iz) + 1) / dim[2] + (np.min(iz) - 1)
+            if "A" in opt and "B" in opt:
+                v0 = (opt["A"] @ v0.T + opt["B"][:, None]).T
+
+            if "hole" in opt:
+                holes = np.vstack((holes, opt["hole"]))
+            if "region" in opt:
+                regions = np.vstack((regions, opt["region"]))
+
+            el = np.vstack(
+                (el, np.hstack((f0 + len(no), np.ones((f0.shape[0], 1)) * (i + 1))))
+            )
+            no = np.vstack((no, v0)) if len(no) > 0 else v0
 
     if "surf" in opt:
         for surf in opt["surf"]:
-            surf["elem"][:, 3] = maxlevel + len(opt["surf"])
-            el = np.vstack([el, surf["elem"] + len(no)])
-            no = np.vstack([no, surf["node"]])
+            surf["elem"][:, 3] = maxlevel + 1
+            el = np.vstack((el, surf["elem"] + len(no)))
+            no = np.vstack((no, surf["node"]))
+
+    print("Surface mesh generation is complete")
 
     return no, el, regions, holes
 
@@ -338,15 +389,36 @@ def surf2mesh(
     holes=None,
     forcebox=0,
     method="tetgen",
-    cmdopt="",
+    cmdopt=None,
 ):
-    print("Generating tetrahedral mesh from closed surfaces...")
+    """
+    Create a quality volumetric mesh from isosurface patches.
+
+    Parameters:
+    v: isosurface node list, shape (nn,3). If v has 4 columns, the last column specifies mesh density near each node.
+    f: isosurface face element list, shape (be,3). If f has 4 columns, it indicates the label of the face triangles.
+    p0: coordinates of one corner of the bounding box, [x0, y0, z0].
+    p1: coordinates of the other corner of the bounding box, [x1, y1, z1].
+    keepratio: percentage of elements kept after simplification, between 0 and 1.
+    maxvol: maximum volume of tetrahedra elements.
+    regions: list of regions, specified by an internal point for each region.
+    holes: list of holes, similar to regions.
+    forcebox: 1 to add bounding box, 0 for automatic.
+    method: meshing method (default is 'tetgen').
+    cmdopt: additional options for the external mesh generator.
+
+    Returns:
+    node: node coordinates of the tetrahedral mesh.
+    elem: element list of the tetrahedral mesh.
+    face: mesh surface element list, with the last column denoting the boundary ID.
+    """
 
     if keepratio > 1 or keepratio < 0:
         print(
-            "Warning: keepratio must be between 0 and 1. No simplification will be performed."
+            'The "keepratio" parameter must be between 0 and 1. No simplification will be performed.'
         )
 
+    # Resample surface mesh if keepratio is less than 1
     if keepratio < 1 and not isinstance(f, list):
         print("Resampling surface mesh...")
         no, el = meshresample(v[:, :3], f[:, :3], keepratio)
@@ -355,314 +427,153 @@ def surf2mesh(
         no = v
         el = f
 
+    # Handle regions and holes arguments
     if regions is None:
         regions = []
     if holes is None:
         holes = []
 
-    if len(regions) >= 4 and maxvol is not None:
-        print("Warning: maxvol will be ignored due to region-based volume constraint.")
+    # Warn if both maxvol and region-based volume constraints are specified
+    if regions.shape[1] >= 4 and maxvol is not None:
+        print(
+            "Warning: Both maxvol and region-based volume constraints are specified. maxvol will be ignored."
+        )
         maxvol = None
 
     dobbx = forcebox
 
-    if not isinstance(el, list) and len(no) > 0 and len(el) > 0:
+    # Dump surface mesh to .poly file format
+    if not isinstance(el, list) and no.size and el.size:
         saveoff(no[:, :3], el[:, :3], "post_vmesh.off")
 
-    savesurfpoly(no, el, holes, regions, p0, p1, "post_vmesh.poly", dobbx)
-
-    moreopt = ""
-    if no.shape[1] == 4:
-        moreopt = " -m "
-
-    # Call TetGen for mesh generation
+    # Generate volumetric mesh from surface mesh
     print("Creating volumetric mesh from surface mesh...")
+    if cmdopt is None:
+        try:
+            cmdopt = eval("ISO2MESH_TETGENOPT")
+        except:
+            cmdopt = ""
 
     if not cmdopt:
-        cmdopt = ""
-
-    command = f'"{method}" -A -q1.414a{maxvol} {moreopt} "post_vmesh.poly"'
-    status, cmdout = subprocess.getstatusoutput(command)
+        tatus, cmdout = subprocess.getstatusoutput(
+            f"{method} -A -q1.414a{maxvol} post_vmesh.poly"
+        )
+    else:
+        tatus, cmdout = subprocess.getstatusoutput(f"{method} {cmdopt} post_vmesh.poly")
 
     if status != 0:
-        raise Exception(f"TetGen command failed: {cmdout}")
+        raise RuntimeError(f"Tetgen command failed:\n{cmdout}")
 
+    # Read generated mesh
     node, elem, face = readtetgen("post_vmesh.1")
-    print("Volume mesh generation is complete.")
 
+    print("Volume mesh generation complete")
     return node, elem, face
 
 
-from scipy.ndimage import binary_fill_holes
+def smoothsurf(
+    node, mask, conn, iter, useralpha=0.5, usermethod="laplacian", userbeta=0.5
+):
+    """
+    Smoothing a surface mesh.
 
+    Parameters:
+    node: node coordinates of a surface mesh
+    mask: flag whether a node is movable (0 for movable, 1 for non-movable).
+          If mask is None, all nodes are considered movable.
+    conn: a list where each element contains a list of neighboring node IDs for a node
+    iter: number of smoothing iterations
+    useralpha: scalar smoothing parameter, v(k+1) = (1-alpha)*v(k) + alpha*mean(neighbors) (default 0.5)
+    usermethod: smoothing method, 'laplacian', 'laplacianhc', or 'lowpass' (default 'laplacian')
+    userbeta: scalar smoothing parameter for 'laplacianhc' (default 0.5)
 
-def surf2vol(node, face, xi, yi, zi, **kwargs):
-    print("Converting a closed surface to a volumetric binary image...")
+    Returns:
+    p: smoothed node coordinates
+    """
 
-    # Extract options from kwargs
-    label = kwargs.get("label", 0)
-    elabel = 1
-    img = np.zeros((len(xi), len(yi), len(zi)), dtype=int)
+    p = np.copy(node)
 
-    # Check if face contains labels or tetrahedral elements
-    if face.shape[1] >= 4:
-        elabel = np.unique(face[:, -1])
-        if face.shape[1] == 5:
-            label = 1
-            el = face
-            face = []
-            for i in range(len(elabel)):
-                fc = volface(el[el[:, 4] == elabel[i], :4])
-                fc = np.column_stack((fc, elabel[i]))
-                face.append(fc)
-        else:
-            fc = face
+    # If mask is empty, all nodes are considered movable
+    if mask is None:
+        idx = np.arange(node.shape[0])
     else:
-        fc = face
+        idx = np.where(mask == 0)[0]
 
-    # Loop over the element labels
-    for i in range(len(elabel)):
-        if face.shape[1] == 4:
-            fc = face[face[:, 3] == elabel[i], :3]
-        im = surf2volz(node[:, :3], fc[:, :3], xi, yi, zi)
-        im = np.logical_or(
-            im, np.rollaxis(surf2volz(node[:, [2, 0, 1]], fc[:, :3], zi, xi, yi), 1)
-        )
-        im = np.logical_or(
-            im, np.rollaxis(surf2volz(node[:, [1, 2, 0]], fc[:, :3], yi, zi, xi), 2)
-        )
+    nn = len(idx)
 
-        if kwargs.get("fill", 0) or label:
-            im = binary_fill_holes(im)
-            if label:
-                im = np.cast[np.dtype(elabel[i])](im) * elabel[i]
+    alpha = useralpha
+    method = usermethod
+    beta = userbeta
 
-        img = np.maximum(np.cast[np.dtype(img)](im), img)
+    ibeta = 1 - beta
+    ialpha = 1 - alpha
 
-    v2smap = None
-    if "v2smap" in kwargs:
-        dlen = np.abs([xi[1] - xi[0], yi[1] - yi[0], zi[1] - zi[0]])
-        p0 = np.min(node, axis=0)
-        offset = p0
-        v2smap = np.diag(np.abs(dlen))
-        v2smap[3, 3] = 1
-        v2smap[:3, 3] = offset.T
+    # Remove nodes without neighbors
+    idx = np.array([i for i in idx if len(conn[i]) > 0])
+    nn = len(idx)
 
-    return img, v2smap
+    if method == "laplacian":
+        for j in range(iter):
+            for i in range(nn):
+                p[idx[i], :] = ialpha * p[idx[i], :] + alpha * np.mean(
+                    node[conn[idx[i]], :], axis=0
+                )
+            node = np.copy(p)
 
+    elif method == "laplacianhc":
+        for j in range(iter):
+            q = np.copy(p)
+            for i in range(nn):
+                p[idx[i], :] = np.mean(q[conn[idx[i]], :], axis=0)
+            b = p - (alpha * node + ialpha * q)
+            for i in range(nn):
+                p[idx[i], :] -= beta * b[idx[i], :] + ibeta * np.mean(
+                    b[conn[idx[i]], :], axis=0
+                )
 
-def binsurface(img, nface=3):
-    dim = img.shape
-    if len(dim) < 3:
-        dim = list(dim) + [1]
-    newdim = np.array(dim) + 1
+    elif method == "lowpass":
+        beta = -1.02 * alpha
+        ibeta = 1 - beta
+        for j in range(iter):
+            for i in range(nn):
+                p[idx[i], :] = ialpha * node[idx[i], :] + alpha * np.mean(
+                    node[conn[idx[i]], :], axis=0
+                )
+            node = np.copy(p)
+            for i in range(nn):
+                p[idx[i], :] = ibeta * node[idx[i], :] + beta * np.mean(
+                    node[conn[idx[i]], :], axis=0
+                )
+            node = np.copy(p)
 
-    # Find jumps (0 -> 1 or 1 -> 0) for all directions
-    d1 = np.diff(img, axis=0)
-    d2 = np.diff(img, axis=1)
-    d3 = np.diff(img, axis=2)
-
-    ix, iy = np.where((d1 == 1) | (d1 == -1))
-    jx, jy = np.where((d2 == 1) | (d2 == -1))
-    kx, ky = np.where((d3 == 1) | (d3 == -1))
-
-    # Compensate for dimension reduction from diff
-    ix += 1
-    iy, iz = np.unravel_index(iy, dim[1:])
-    iy = np.ravel_multi_index((iy, iz), newdim[1:])
-
-    jy, jz = np.unravel_index(jy, [dim[1] - 1, dim[2]])
-    jy += 1
-    jy = np.ravel_multi_index((jy, jz), newdim[1:])
-
-    ky, kz = np.unravel_index(ky, [dim[1], dim[2] - 1])
-    kz += 1
-    ky = np.ravel_multi_index((ky, kz), newdim[1:])
-
-    id1 = np.ravel_multi_index((ix, iy), newdim)
-    id2 = np.ravel_multi_index((jx, jy), newdim)
-    id3 = np.ravel_multi_index((kx, ky), newdim)
-
-    if nface == 0:
-        elem = np.column_stack((id1, id2, id3))
-        node = np.zeros(newdim)
-        node[elem] = 1
-        node = node[1:-1, 1:-1, 1:-1] - 1
-        return node, elem
-
-    xy = newdim[0] * newdim[1]
-
-    if nface == 3:
-        elem = np.vstack(
-            [
-                [id1, id1 + newdim[0], id1 + newdim[0] + xy],
-                [id1, id1 + newdim[0] + xy, id1 + xy],
-                [id2, id2 + 1, id2 + 1 + xy],
-                [id2, id2 + 1 + xy, id2 + xy],
-                [id3, id3 + 1, id3 + 1 + newdim[0]],
-                [id3, id3 + 1 + newdim[0], id3 + newdim[0]],
-            ]
-        ).reshape(-1, 3)
-    else:
-        elem = np.vstack(
-            [
-                [id1, id1 + newdim[0], id1 + newdim[0] + xy, id1 + xy],
-                [id2, id2 + 1, id2 + 1 + xy, id2 + xy],
-                [id3, id3 + 1, id3 + 1 + newdim[0], id3 + newdim[0]],
-            ]
-        )
-
-    nodemap = np.zeros(np.max(elem) + 1, dtype=int)
-    nodemap[elem.ravel()] = 1
-    id = np.nonzero(nodemap)[0]
-    nodemap[id] = np.arange(len(id))
-    elem = nodemap[elem]
-
-    xi, yi, zi = np.unravel_index(id, newdim)
-    node = np.column_stack((xi, yi, zi)) - 1
-
-    if nface == 3:
-        node, elem = meshcheckrepair(node, elem)
-
-    return node, elem
-
-
-import subprocess
-
-
-def cgalv2m(vol, opt=None, maxvol=None):
-    print("Creating surface and tetrahedral mesh from a multi-domain volume...")
-
-    if not (vol.dtype == bool or vol.dtype == np.uint8):
-        raise ValueError(
-            "cgalmesher can only handle uint8 volumes. Convert your image to uint8 first."
-        )
-
-    if not np.any(vol):
-        raise ValueError("No labeled regions found in the input volume.")
-
-    exesuff = getexeext()
-    exesuff = fallbackexeext(exesuff, "cgalmesh")
-
-    # Default CGAL meshing parameters
-    ang = 30
-    ssize = 6
-    approx = 0.5
-    reratio = 3
-
-    if not isinstance(opt, dict):
-        ssize = opt
-    else:
-        ssize = opt.get("radbound", ssize)
-        ang = opt.get("angbound", ang)
-        approx = opt.get("distbound", approx)
-        reratio = opt.get("reratio", reratio)
-
-    saveinr(vol, mwpath("pre_cgalmesh.inr"))
-    deletemeshfile(mwpath("post_cgalmesh.mesh"))
-
-    randseed = 0x623F9A9E  # Default random seed
-    randseed = get_randseed_from_base(randseed)
-
-    format_maxvol = "%s" if isinstance(maxvol, str) else "%f"
-
-    cmd = f'"{mcpath("cgalmesh")}{exesuff}" "{mwpath("pre_cgalmesh.inr")}" "{mwpath("post_cgalmesh.mesh")}" {ang} {ssize} {approx} {reratio} {maxvol} {randseed}'
-    status, cmdout = subprocess.getstatusoutput(cmd)
-
-    if not os.path.exists(mwpath("post_cgalmesh.mesh")):
-        raise FileNotFoundError(
-            f"Output file was not found. Failure encountered when running command: {cmd}"
-        )
-
-    node, elem, face = readmedit(mwpath("post_cgalmesh.mesh"))
-
-    if isinstance(opt, dict) and "A" in opt and "B" in opt:
-        node[:, :3] = (opt["A"] @ node[:, :3].T + opt["B"].reshape(-1, 1)).T
-
-    print(
-        f"Node number: {len(node)}\nTriangles: {len(face)}\nTetrahedra: {len(elem)}\nRegions: {len(np.unique(elem[:, -1]))}"
-    )
-    print("Surface and volume meshes complete.")
-
-    if len(node) > 0:
-        node, elem, face = sortmesh(
-            node[0, :], node, elem, np.arange(4), face, np.arange(3)
-        )
-
-    node += 0.5
-    elem[:, :4] = meshreorient(node[:, :3], elem[:, :4])
-
-    return node, elem, face
-
-
-def cgals2m(v, f, opt=None, maxvol=None, **kwargs):
-    print("Creating surface and tetrahedral mesh from a polyhedral surface...")
-
-    exesuff = fallbackexeext(getexeext(), "cgalpoly")
-
-    # Default meshing parameters
-    ang = 30
-    ssize = 6
-    approx = 0.5
-    reratio = 3
-
-    # Handle optional parameters
-    if not isinstance(opt, dict):
-        ssize = opt
-    else:
-        ssize = opt.get("radbound", ssize)
-        ang = opt.get("angbound", ang)
-        approx = opt.get("distbound", approx)
-        reratio = opt.get("reratio", reratio)
-
-    flags = kwargs
-
-    # Check and repair mesh if specified
-    if flags.get("DoRepair", 0) == 1:
-        v, f = meshcheckrepair(v, f)
-
-    saveoff(v, f, mwpath("pre_cgalpoly.off"))
-    deletemeshfile(mwpath("post_cgalpoly.mesh"))
-
-    # Set a random seed
-    randseed = 0x623F9A9E
-    randseed = get_randseed_from_base(randseed)
-
-    cmd = f'"{mcpath("cgalpoly")}{exesuff}" "{mwpath("pre_cgalpoly.off")}" "{mwpath("post_cgalpoly.mesh")}" {ang:.16f} {ssize:.16f} {approx:.16f} {reratio:.16f} {maxvol:.16f} {randseed}'
-
-    status, cmdout = subprocess.getstatusoutput(cmd)
-
-    if status:
-        raise RuntimeError("cgalpoly command failed")
-
-    if not os.path.exists(mwpath("post_cgalpoly.mesh")):
-        raise FileNotFoundError(f"Output file was not found. Command failed: {cmd}")
-
-    node, elem, face = readmedit(mwpath("post_cgalpoly.mesh"))
-
-    print(f"Node number:\t{len(node)}")
-    print(f"Triangles:\t{len(face)}")
-    print(f"Tetrahedra:\t{len(elem)}")
-    print(f"Regions:\t{len(np.unique(elem[:, -1]))}")
-    print("Surface and volume meshes complete.")
-
-    return node, elem, face
+    return p
 
 
 def surf2volz(node, face, xi, yi, zi):
+    """
+    Convert a triangular surface to a shell of voxels in a 3D image along the z-axis.
+
+    Parameters:
+    node: node list of the triangular surface, with 3 columns for x/y/z
+    face: triangle node indices, each row represents a triangle
+    xi, yi, zi: x/y/z grid for the resulting volume
+
+    Returns:
+    img: a volumetric binary image at the position of ndgrid(xi, yi, zi)
+    """
+
     ne = face.shape[0]
     img = np.zeros((len(xi), len(yi), len(zi)), dtype=np.uint8)
-
     dx0 = np.min(np.abs(np.diff(xi)))
     dx = dx0 / 2
     dy0 = np.min(np.abs(np.diff(yi)))
     dy = dy0 / 2
     dz0 = np.min(np.abs(np.diff(zi)))
-    dl = np.sqrt(dx * dx + dy * dy)
-
+    dl = np.sqrt(dx**2 + dy**2)
     minz = np.min(node[:, 2])
     maxz = np.max(node[:, 2])
 
+    # Determine the z index range
     iz = np.histogram([minz, maxz], bins=zi)[0]
     hz = np.nonzero(iz)[0]
     iz = np.arange(hz[0], min(len(zi), hz[-1] + 1))
@@ -671,14 +582,14 @@ def surf2volz(node, face, xi, yi, zi):
         plane = np.array([[0, 100, zi[i]], [100, 0, zi[i]], [0, 0, zi[i]]])
         bcutpos, bcutvalue, bcutedges = qmeshcut(face[:, :3], node, node[:, 0], plane)
 
-        if bcutpos is None:
+        if bcutpos.size == 0:
             continue
 
         enum = bcutedges.shape[0]
+
         for j in range(enum):
             e0 = bcutpos[bcutedges[j, 0], :2]
             e1 = bcutpos[bcutedges[j, 1], :2]
-
             length = np.ceil(np.sum(np.abs(e1 - e0)) / (np.abs(dx) + np.abs(dy))) + 1
             dd = (e1 - e0) / length
 
@@ -688,30 +599,453 @@ def surf2volz(node, face, xi, yi, zi):
             posy = np.floor(
                 (e0[1] + np.arange(length + 1) * dd[1] - yi[0]) / dy0
             ).astype(int)
-            pos = np.column_stack((posx, posy))
-            valid_idx = np.all(
-                (posx > 0, posy > 0, posx < len(xi), posy < len(yi)), axis=0
-            )
-            pos = pos[valid_idx]
+            pos = np.vstack((posx, posy)).T
+
+            pos = pos[(posx > 0) & (posx <= len(xi)) & (posy > 0) & (posy <= len(yi))]
 
             if len(pos) > 0:
-                zz = int(np.floor((zi[i] - zi[0]) / dz0))
+                zz = np.floor((zi[i] - zi[0]) / dz0).astype(int)
                 for k in range(pos.shape[0]):
                     img[pos[k, 0], pos[k, 1], zz] = 1
 
     return img
 
 
-def meshcheckrepair(node, elem, opt="dup", extra=None):
-    # remove duplicate nodes if opt is 'dupnode' or 'dup'
+def surf2vol(node, face, xi, yi, zi, **kwargs):
+    """
+    Convert a triangular surface to a shell of voxels in a 3D image.
+
+    Parameters:
+    node: node list of the triangular surface, 3 columns for x/y/z
+    face: triangle node indices, each row is a triangle
+          If face contains a 4th column, it indicates the label of the face triangles.
+          If face contains 5 columns, it stores a tetrahedral mesh with labels.
+    xi, yi, zi: x/y/z grid for the resulting volume
+    kwargs: optional parameters:
+        'fill': if set to 1, the enclosed voxels are labeled as 1.
+        'label': if set to 1, the enclosed voxels are labeled by the corresponding label of the face or element.
+                 Setting 'label' to 1 also implies 'fill'.
+
+    Returns:
+    img: a volumetric binary image at the position of ndgrid(xi, yi, zi)
+    v2smap (optional): a 4x4 matrix denoting the Affine transformation to map voxel coordinates back to the mesh space.
+    """
+
+    opt = kwargs
+    label = opt.get("label", 0)
+    elabel = 1
+
+    if face.shape[1] >= 4:
+        elabel = np.unique(face[:, -1])
+        if face.shape[1] == 5:
+            label = 1
+            el = face
+            face = np.empty((0, 4))
+            for lbl in elabel:
+                fc = volface(el[el[:, 4] == lbl, :4])
+                fc = np.hstack((fc, np.full((fc.shape[0], 1), lbl)))
+                face = np.vstack((face, fc))
+    else:
+        fc = face
+
+    img = np.zeros((len(xi), len(yi), len(zi)), dtype=elabel.dtype)
+
+    for lbl in elabel:
+        if face.shape[1] == 4:
+            fc = face[face[:, 3] == lbl, :3]
+
+        im = surf2volz(node[:, :3], fc[:, :3], xi, yi, zi)
+        im |= np.moveaxis(surf2volz(node[:, [2, 0, 1]], fc[:, :3], zi, xi, yi), 0, 2)
+        im |= np.moveaxis(surf2volz(node[:, [1, 2, 0]], fc[:, :3], yi, zi, xi), 0, 1)
+
+        if opt.get("fill", 0) or label:
+            im = imfill(im, "holes")
+            if label:
+                im = im.astype(elabel.dtype) * lbl
+
+        img = np.maximum(im.astype(img.dtype), img)
+
+    v2smap = None
+    if "v2smap" in kwargs:
+        dlen = np.abs([xi[1] - xi[0], yi[1] - yi[0], zi[1] - zi[0]])
+        offset = np.min(node, axis=0)
+        v2smap = np.eye(4)
+        v2smap[:3, :3] = np.diag(np.abs(dlen))
+        v2smap[:3, 3] = offset
+
+    return img, v2smap
+
+
+def binsurface(img, nface=3):
+    """
+    Fast isosurface extraction from 3D binary images.
+
+    Parameters:
+    img: a 3D binary image
+    nface:
+        - 3 or ignored: triangular faces
+        - 4: square faces
+        - 0: return a boundary mask image via node
+
+    Returns:
+    node: node coordinates, 3 columns for x, y, z
+    elem: surface mesh face element list
+    """
+
+    dim = img.shape
+    if len(dim) < 3:
+        dim = (*dim, 1)
+
+    newdim = np.array(dim) + 1
+
+    # Find the jumps (0->1 or 1->0) for all directions
+    d1 = np.diff(img, axis=0)
+    d2 = np.diff(img, axis=1)
+    d3 = np.diff(img, axis=2)
+
+    ix, iy = np.where((d1 == 1) | (d1 == -1))
+    jx, jy = np.where((d2 == 1) | (d2 == -1))
+    kx, ky = np.where((d3 == 1) | (d3 == -1))
+
+    # Compensate for dimension reduction due to diff
+    ix = ix + 1
+    iy, iz = np.unravel_index(iy, dim[1:])
+    iy = np.ravel_multi_index((iy, iz), newdim[1:])
+
+    jy, jz = np.unravel_index(jy, (dim[1] - 1, dim[2]))
+    jy = np.ravel_multi_index((jy + 1, jz), newdim[1:])
+
+    ky, kz = np.unravel_index(ky, (dim[1], dim[2] - 1))
+    ky = np.ravel_multi_index((ky, kz + 1), newdim[1:])
+
+    id1 = np.ravel_multi_index((ix, iy), newdim)
+    id2 = np.ravel_multi_index((jx, jy), newdim)
+    id3 = np.ravel_multi_index((kx, ky), newdim)
+
+    if nface == 0:
+        elem = np.vstack((id1, id2, id3)).T
+        node = np.zeros(newdim)
+        node[elem] = 1
+        node = node[1:-1, 1:-1, 1:-1] - 1
+        return node, elem
+
+    # Generate triangles or boxes based on nface
+    xy = newdim[0] * newdim[1]
+
+    if nface == 3:
+        elem = np.vstack(
+            [
+                [id1, id1 + newdim[0], id1 + newdim[0] + xy],
+                [id1, id1 + newdim[0] + xy, id1 + xy],
+            ]
+        ).T
+        elem = np.vstack(
+            [elem, [id2, id2 + 1, id2 + 1 + xy], [id2, id2 + 1 + xy, id2 + xy]]
+        )
+        elem = np.vstack(
+            [
+                elem,
+                [id3, id3 + 1, id3 + 1 + newdim[0]],
+                [id3, id3 + 1 + newdim[0], id3 + newdim[0]],
+            ]
+        )
+    else:
+        elem = np.vstack(
+            [
+                [id1, id1 + newdim[0], id1 + newdim[0] + xy, id1 + xy],
+                [id2, id2 + 1, id2 + 1 + xy, id2 + xy],
+                [id3, id3 + 1, id3 + 1 + newdim[0], id3 + newdim[0]],
+            ]
+        )
+
+    # Compress node indices
+    nodemap = np.zeros(np.max(elem) + 1, dtype=int)
+    nodemap[elem.ravel()] = 1
+    id = np.nonzero(nodemap)[0]
+    nodemap = np.zeros_like(nodemap)
+    nodemap[id] = np.arange(1, len(id) + 1)
+    elem = nodemap[elem]
+
+    # Create coordinates
+    xi, yi, zi = np.unravel_index(id, newdim)
+    node = np.vstack([xi, yi, zi]).T - 1
+
+    if nface == 3:
+        node, elem = meshcheckrepair(node, elem)
+
+    return node, elem
+
+
+def cgalv2m(vol, opt, maxvol):
+    """
+    Wrapper for CGAL 3D mesher (CGAL 3.5 or up) to convert a binary or multi-valued volume to tetrahedral mesh.
+
+    Parameters:
+    vol: a volumetric binary image.
+    opt: parameters for the CGAL mesher. If opt is a structure:
+        opt.radbound: maximum surface element size.
+        opt.angbound: minimum angle of a surface triangle.
+        opt.distbound: maximum distance between the center of the surface bounding circle and the element bounding sphere.
+        opt.reratio: maximum radius-edge ratio.
+        If opt is a scalar, it specifies radbound.
+    maxvol: target maximum tetrahedral element volume.
+
+    Returns:
+    node: node coordinates of the tetrahedral mesh.
+    elem: element list of the tetrahedral mesh, the last column is the region ID.
+    face: mesh surface element list of the tetrahedral mesh, the last column denotes the boundary ID.
+    """
+
+    print("Creating surface and tetrahedral mesh from a multi-domain volume...")
+
+    if not (np.issubdtype(vol.dtype, np.bool_) or vol.dtype == np.uint8):
+        raise ValueError(
+            "CGAL mesher can only handle uint8 volumes. Convert your image to uint8 first."
+        )
+
+    if not np.any(vol):
+        raise ValueError("No labeled regions found in the input volume.")
+
+    exesuff = getexeext()
+    exesuff = fallbackexeext(exesuff, "cgalmesh")
+
+    ang = 30
+    ssize = 6
+    approx = 0.5
+    reratio = 3
+
+    if not isinstance(opt, dict):
+        ssize = opt
+
+    if isinstance(opt, dict) and len(opt) == 1:
+        ssize = opt.get("radbound", ssize)
+        ang = opt.get("angbound", ang)
+        approx = opt.get("distbound", approx)
+        reratio = opt.get("reratio", reratio)
+
+    saveinr(vol, mwpath("pre_cgalmesh.inr"))
+    deletemeshfile(mwpath("post_cgalmesh.mesh"))
+
+    randseed = int("623F9A9E", 16)
+
+    cmd = f'"{mcpath("cgalmesh")}{exesuff}" "{mwpath("pre_cgalmesh.inr")}" "{mwpath("post_cgalmesh.mesh")}" {ang} {ssize} {approx} {reratio} {maxvol} {randseed}'
+
+    os.system(cmd)
+
+    if not os.path.exists(mwpath("post_cgalmesh.mesh")):
+        raise RuntimeError(f"Output file was not found. Command failed: {cmd}")
+
+    node, elem, face = readmedit(mwpath("post_cgalmesh.mesh"))
+
+    if isinstance(opt, dict) and len(opt) == 1:
+        if "A" in opt and "B" in opt:
+            node[:, :3] = (
+                opt["A"] @ node[:, :3].T
+                + np.tile(opt["B"][:, None], (1, node.shape[0]))
+            ).T
+
+    print(
+        f"Node number: {node.shape[0]}\nTriangles: {face.shape[0]}\nTetrahedra: {elem.shape[0]}\nRegions: {len(np.unique(elem[:, -1]))}"
+    )
+    print("Surface and volume meshes complete")
+
+    if node.shape[0] > 0:
+        node, elem, face = sortmesh(
+            node[0, :], node, elem, list(range(4)), face, list(range(3))
+        )
+
+    node += 0.5
+    elem[:, :4] = meshreorient(node[:, :3], elem[:, :4])
+
+    return node, elem, face
+
+
+def cgals2m(v, f, opt, maxvol, *args):
+    """
+    Convert a triangular surface to a tetrahedral mesh using CGAL mesher.
+
+    Parameters:
+    v : ndarray
+        Node coordinate list of a surface mesh (nn x 3)
+    f : ndarray
+        Face element list of a surface mesh (be x 3)
+    opt : dict or scalar
+        Parameters for CGAL mesher. If it's a dict, it can include:
+            - radbound: Maximum surface element size
+            - angbound: Minimum angle of a surface triangle
+            - distbound: Max distance between surface bounding circle center and element bounding sphere center
+            - reratio: Maximum radius-edge ratio
+        If it's a scalar, it only specifies radbound.
+    maxvol : float
+        Target maximum tetrahedral element volume.
+    *args : Additional arguments
+
+    Returns:
+    node : ndarray
+        Node coordinates of the tetrahedral mesh.
+    elem : ndarray
+        Element list of the tetrahedral mesh. The last column is the region id.
+    face : ndarray
+        Mesh surface element list of the tetrahedral mesh. The last column denotes the boundary ID.
+    """
+
+    print("Creating surface and tetrahedral mesh from a polyhedral surface ...")
+
+    exesuff = fallbackexeext(getexeext(), "cgalpoly")
+
+    ang = 30
+    ssize = 6
+    approx = 0.5
+    reratio = 3
+    flags = args_to_dict(*args)
+
+    if not isinstance(opt, dict):
+        ssize = opt
+
+    if isinstance(opt, dict) and len(opt) == 1:
+        ssize = opt.get("radbound", ssize)
+        ang = opt.get("angbound", ang)
+        approx = opt.get("distbound", approx)
+        reratio = opt.get("reratio", reratio)
+
+    if flags.get("DoRepair", 0) == 1:
+        v, f = meshcheckrepair(v, f)
+
+    saveoff(v, f, mwpath("pre_cgalpoly.off"))
+    deletemeshfile(mwpath("post_cgalpoly.mesh"))
+
+    randseed = os.getenv("ISO2MESH_SESSION", int("623F9A9E", 16))
+
+    cmd = (
+        f'"{mcpath("cgalpoly")}{exesuff}" "{mwpath("pre_cgalpoly.off")}" "{mwpath("post_cgalpoly.mesh")}" '
+        f"{ang:.16f} {ssize:.16f} {approx:.16f} {reratio:.16f} {maxvol:.16f} {randseed}"
+    )
+
+    status = subprocess.call(cmd, shell=True)
+
+    if status != 0:
+        raise RuntimeError("cgalpoly command failed")
+
+    if not os.path.exists(mwpath("post_cgalpoly.mesh")):
+        raise FileNotFoundError(
+            f"Output file was not found, failure occurred when running command: \n{cmd}"
+        )
+
+    node, elem, face = readmedit(mwpath("post_cgalpoly.mesh"))
+
+    print(f"node number:\t{node.shape[0]}")
+    print(f"triangles:\t{face.shape[0]}")
+    print(f"tetrahedra:\t{elem.shape[0]}")
+    print(f"regions:\t{len(np.unique(elem[:, -1]))}")
+    print("Surface and volume meshes complete")
+
+    return node, elem, face
+
+
+def qmeshcut(elem, node, value, cutat):
+    """
+    Fast tetrahedral mesh slicer. Intersects a 3D mesh with a plane or isosurface.
+
+    Parameters:
+    elem: Integer array (Nx4), indices of nodes forming tetrahedra
+    node: Node coordinates (Nx3 array for x, y, z)
+    value: Scalar array of values at each node or element
+    cutat: Can define the cutting plane or isosurface using:
+           - 3x3 matrix (plane by 3 points)
+           - Vector [a, b, c, d] for plane (a*x + b*y + c*z + d = 0)
+           - Scalar for isosurface at value=cutat
+           - String expression for an implicit surface
+
+    Returns:
+    cutpos: Coordinates of intersection points
+    cutvalue: Interpolated values at the intersection
+    facedata: Indices forming the intersection polygons
+    elemid: Tetrahedron indices where intersection occurs
+    nodeid: Interpolation info for intersection points
+    """
+
+    if len(value) != len(node) and len(value) != len(elem) and len(value) != 0:
+        raise ValueError("Length of value must match either node or elem")
+
+    # Handle implicit plane definitions
+    if isinstance(cutat, str):
+        x, y, z = node[:, 0], node[:, 1], node[:, 2]
+        expr = cutat.split("=")
+        if len(expr) != 2:
+            raise ValueError('Expression must contain a single "=" sign')
+        dist = eval(expr[0]) - eval(expr[1])
+    elif isinstance(cutat, list) and len(cutat) == 4:
+        a, b, c, d = cutat
+        dist = a * node[:, 0] + b * node[:, 1] + c * node[:, 2] + d
+    else:
+        dist = value - cutat
+
+    # Determine which nodes are above/below the cut surface
+    asign = np.sign(dist)
+
+    # Find edges that cross the cut
+    edges = np.vstack([elem[:, [i, j]] for i in range(3) for j in range(i + 1, 4)])
+    cutedges = np.where(np.sum(asign[edges], axis=1) == 0)[0]
+
+    # Interpolation for cut positions
+    nodeid = edges[cutedges]
+    cutweight = np.abs(
+        dist[nodeid] / (dist[nodeid[:, 0]] - dist[nodeid[:, 1]]).reshape(-1, 1)
+    )
+    cutpos = (
+        node[nodeid[:, 0]] * cutweight[:, 1][:, None]
+        + node[nodeid[:, 1]] * cutweight[:, 0][:, None]
+    )
+
+    cutvalue = None
+    if len(value) == len(node):
+        cutvalue = (
+            value[nodeid[:, 0]] * cutweight[:, 1]
+            + value[nodeid[:, 1]] * cutweight[:, 0]
+        )
+
+    # Organize intersection polygons (faces) and element ids
+    emap = np.zeros(edges.shape[0])
+    emap[cutedges] = np.arange(len(cutedges))
+    elemid = np.where(np.sum(emap.reshape(-1, 6), axis=1) > 0)[0]
+
+    facedata = np.vstack([emap[cutedges].reshape(-1, 3)])
+
+    return cutpos, cutvalue, facedata, elemid, nodeid
+
+
+def meshcheckrepair(node, elem, opt="dupnode", **kwargs):
+    """
+    Check and repair a surface mesh.
+
+    Parameters:
+    node: input/output, surface node list, shape (nn, 3)
+    elem: input/output, surface face element list, shape (be, 3)
+    opt: options, including:
+        'dupnode': remove duplicated nodes
+        'dupelem' or 'duplicated': remove duplicated elements
+        'dup': perform both above
+        'isolated': remove isolated nodes
+        'open': abort if an open surface is found
+        'deep': remove non-manifold vertices using external tools
+        'meshfix': repair a closed surface using meshfix utility
+        'intersect': test for self-intersecting elements
+    kwargs: additional options
+
+    Returns:
+    node: repaired node list
+    elem: repaired face element list
+    """
+
+    extra = kwargs
+
     if opt in ["dupnode", "dup"]:
         l1 = node.shape[0]
-        node, elem = removedupnodes(node, elem, tolerance=0)
+        node, elem = removedupnodes(node, elem, tolerance=extra.get("Tolerance", 0))
         l2 = node.shape[0]
         if l2 != l1:
             print(f"{l1 - l2} duplicated nodes were removed")
 
-    # remove duplicate elements if opt is 'duplicated' or 'dupelem' or 'dup'
     if opt in ["duplicated", "dupelem", "dup"]:
         l1 = elem.shape[0]
         elem = removedupelem(elem)
@@ -719,7 +1053,6 @@ def meshcheckrepair(node, elem, opt="dup", extra=None):
         if l2 != l1:
             print(f"{l1 - l2} duplicated elements were removed")
 
-    # remove isolated nodes if opt is 'isolated'
     if opt == "isolated":
         l1 = node.shape[0]
         node, elem = removeisolatednode(node, elem)
@@ -727,63 +1060,34 @@ def meshcheckrepair(node, elem, opt="dup", extra=None):
         if l2 != l1:
             print(f"{l1 - l2} isolated nodes were removed")
 
-    # check for open surface if opt is 'open'
     if opt == "open":
         eg = surfedge(elem)
         if len(eg) > 0:
-            raise ValueError("open surface found, you need to enclose it")
+            raise ValueError(
+                "Open surface found. You need to enclose it by padding zeros around the volume."
+            )
 
-    # repair mesh using external tool like jmeshlib if opt is 'deep'
     if opt == "deep":
-        saveoff(node, elem, "pre_sclean.off")
-        command = f"jmeshlib pre_sclean.off post_sclean.off"
-        status = subprocess.run(command, shell=True)
-        if status.returncode != 0:
-            raise RuntimeError("jmeshlib command failed")
-        node, elem = readoff("post_sclean.off")
+        # Call external tool like jmeshlib to clean non-manifold vertices
+        run_external_meshcleaner("jmeshlib", node, elem, extra)
 
-    # repair mesh using meshfix if opt is 'meshfix'
     if opt == "meshfix":
-        saveoff(node, elem, "pre_sclean.off")
-        command = f"meshfix pre_sclean.off"
-        status = subprocess.run(command, shell=True)
-        if status.returncode != 0:
-            raise RuntimeError("meshfix command failed")
-        node, elem = readoff("pre_sclean_fixed.off")
+        # Call meshfix to repair the surface
+        run_external_meshcleaner(
+            "meshfix",
+            node,
+            elem,
+            extra,
+            meshfix_param=extra.get("MeshfixParam", "-q -a 0.01"),
+        )
 
-    # check for self-intersections if opt is 'intersect'
     if opt == "intersect":
-        saveoff(node, elem, "pre_sclean.off")
-        command = f"meshfix --intersect pre_sclean.off"
-        subprocess.run(command, shell=True)
+        # Test for intersecting elements
+        run_external_meshcleaner(
+            "meshfix", node, elem, extra, moreopt=" -q --no-clean --intersect"
+        )
 
     return node, elem
-
-
-def meshreorient(node, elem):
-    """
-    Reorders nodes in a surface or tetrahedral mesh to ensure all elements are consistently oriented.
-
-    Args:
-    node: List of nodes (coordinates).
-    elem: List of elements (each row contains indices of nodes for each element).
-
-    Returns:
-    newelem: Element list with consistent ordering.
-    evol: Signed element volume before reorientation.
-    idx: Indices of elements that had negative volume.
-    """
-    # Calculate the signed element volume
-    evol = elemvolume(node, elem, signed=True)
-
-    # Find elements with negative volume
-    idx = np.where(evol < 0)[0]
-
-    # Swap the last two nodes of the elements with negative volume
-    elem[idx, [-2, -1]] = elem[idx, [-1, -2]]
-
-    newelem = elem
-    return newelem, evol, idx
 
 
 def removedupelem(elem):
@@ -1277,94 +1581,147 @@ def mergesurf(node, elem, *args):
     return newnode, newelem
 
 
-def surfboolean(node, elem, *args):
+def surfboolean(node, elem, *varargin):
     """
-    Merge two or more triangular meshes and resolve intersecting elements.
+    Perform boolean operations on triangular meshes and resolve intersecting elements.
 
-    Args:
-        node: Node coordinates (nn, 3).
-        elem: Triangle surface elements (ne, 3).
-        *args: Triplets of (operation, node, elem) for additional meshes and boolean operations.
+    Parameters:
+    node : ndarray
+        Node coordinates (nn x 3)
+    elem : ndarray
+        Triangle surfaces (ne x 3)
+    varargin : list
+        Additional parameters including operators and meshes (op, node, elem)
 
     Returns:
-        newnode: The node coordinates after boolean operations.
-        newelem: Surface elements after boolean operations.
-        newelem0: Intersecting element list (for self-intersection, optional).
+    newnode : ndarray
+        Node coordinates after the boolean operations.
+    newelem : ndarray
+        Elements after boolean operations (nn x 4) or (nhn x 5).
+    newelem0 : ndarray (optional)
+        For 'self' operator, returns the intersecting element list in terms of the input node list.
     """
-    len_args = len(args)
+
+    len_varargin = len(varargin)
     newnode = node
     newelem = elem
 
-    if len_args > 0 and len_args % 3 != 0:
-        raise ValueError("You must provide operator, node, and element in triplets")
+    if len_varargin > 0 and len_varargin % 3 != 0:
+        raise ValueError(
+            "You must provide operator, node, and element in a triplet form."
+        )
 
-    for i in range(0, len_args, 3):
-        op = args[i]
-        no = args[i + 1]
-        el = args[i + 2]
+    try:
+        exename = os.environ.get("ISO2MESH_SURFBOOLEAN", "cork")
+    except KeyError:
+        exename = "cork"
 
-        # Map common operations to internal command strings
-        if op in ["or", "union"]:
-            opstr = "union"
-        elif op == "xor":
-            opstr = "all"
-        elif op == "and":
-            opstr = "isct"
-        elif op == "-":
-            opstr = "diff"
-        elif op == "self":
-            opstr = "solid"
+    exesuff = fallbackexeext(getexeext(), exename)
+    randseed = int("623F9A9E", 16)  # Random seed
+
+    # Check if ISO2MESH_RANDSEED is available
+    iso2mesh_randseed = os.environ.get("ISO2MESH_RANDSEED")
+    if iso2mesh_randseed is not None:
+        randseed = int(iso2mesh_randseed, 16)
+
+    for i in range(0, len_varargin, 3):
+        op = varargin[i]
+        no = varargin[i + 1]
+        el = varargin[i + 2]
+        opstr = op
+
+        # Map operations to proper string values
+        op_map = {
+            "or": "union",
+            "xor": "all",
+            "and": "isct",
+            "-": "diff",
+            "self": "solid",
+        }
+        opstr = op_map.get(op, op)
+
+        tempsuff = "off"
+        deletemeshfile(mwpath(f"pre_surfbool*.{tempsuff}"))
+        deletemeshfile(mwpath("post_surfbool.off"))
+
+        if opstr == "all":
+            deletemeshfile(mwpath("s1out2.off"))
+            deletemeshfile(mwpath("s1in2.off"))
+            deletemeshfile(mwpath("s2out1.off"))
+            deletemeshfile(mwpath("s2in1.off"))
+
+        if op == "decouple":
+            if "node1" not in locals():
+                node1 = node
+                elem1 = elem
+                newnode[:, 3] = 1
+                newelem[:, 3] = 1
+            opstr = " --decouple-inin 1 --shells 2"
+            saveoff(node1[:, :3], elem1[:, :3], mwpath("pre_decouple1.off"))
+            if no.shape[1] != 3:
+                opstr = f"-q --shells {no}"
+                cmd = f'cd "{mwpath()}" && "{mcpath("meshfix")}{exesuff}" "{mwpath("pre_decouple1.off")}" {opstr}'
+            else:
+                saveoff(no[:, :3], el[:, :3], mwpath("pre_decouple2.off"))
+                cmd = f'cd "{mwpath()}" && "{mcpath("meshfix")}{exesuff}" "{mwpath("pre_decouple1.off")}" "{mwpath("pre_decouple2.off")}" {opstr}'
         else:
-            opstr = op
+            saveoff(newnode[:, :3], newelem[:, :3], mwpath(f"pre_surfbool1.{tempsuff}"))
+            saveoff(no[:, :3], el[:, :3], mwpath(f"pre_surfbool2.{tempsuff}"))
+            cmd = f'cd "{mwpath()}" && "{mcpath(exename)}{exesuff}" -{opstr} "{mwpath(f"pre_surfbool1.{tempsuff}")}" "{mwpath(f"pre_surfbool2.{tempsuff}")}" "{mwpath("post_surfbool.off")}" -{randseed}'
 
-        # Placeholder for external command execution (like calling external tools)
-        cmd = build_command(opstr, newnode, newelem, no, el)
-
-        # Execute the command and capture output
-        status, outstr = os.system(cmd)
-
-        if status != 0:
+        status, outstr = subprocess.getstatusoutput(cmd)
+        if status != 0 and op != "self":
             raise RuntimeError(
-                f"Surface boolean operation failed: {cmd}\nError: {outstr}"
+                f"surface boolean command failed:\n{cmd}\nERROR: {outstr}\n"
             )
 
-        # Example handling for self-intersections
         if op == "self":
             if "NOT SOLID" not in outstr:
-                print("No self-intersections found.")
-                return [], [], []
+                print("No self-intersection was found!")
+                return None, None, None
             else:
-                print("Self-intersection detected.")
-                return 1, [], 1
+                print("Input mesh is self-intersecting")
+                return np.array([1]), np.array([]), np.array([1])
 
-    # Placeholder for reading mesh after boolean operations
-    newnode, newelem = read_mesh("post_surfbool.off")
+    # Further processing based on the operation 'all'
+    if opstr == "all":
+        nnode, nelem = readoff(mwpath("s1out2.off"))
+        newelem = np.hstack([nelem, np.ones((nelem.shape[0], 1))])
+        newnode = np.hstack([nnode, np.ones((nnode.shape[0], 1))])
+        nnode, nelem = readoff(mwpath("s1in2.off"))
+        newelem = np.vstack(
+            [
+                newelem,
+                np.hstack([nelem + newnode.shape[0], np.ones((nelem.shape[0], 1)) * 3]),
+            ]
+        )
+        newnode = np.vstack(
+            [newnode, np.hstack([nnode, np.ones((nnode.shape[0], 1)) * 3])]
+        )
+        nnode, nelem = readoff(mwpath("s2out1.off"))
+        newelem = np.vstack(
+            [
+                newelem,
+                np.hstack([nelem + newnode.shape[0], np.ones((nelem.shape[0], 1)) * 2]),
+            ]
+        )
+        newnode = np.vstack(
+            [newnode, np.hstack([nnode, np.ones((nnode.shape[0], 1)) * 2])]
+        )
+        nnode, nelem = readoff(mwpath("s2in1.off"))
+        newelem = np.vstack(
+            [
+                newelem,
+                np.hstack([nelem + newnode.shape[0], np.ones((nelem.shape[0], 1)) * 4]),
+            ]
+        )
+        newnode = np.vstack(
+            [newnode, np.hstack([nnode, np.ones((nnode.shape[0], 1)) * 4])]
+        )
+    else:
+        newnode, newelem = readoff(mwpath("post_surfbool.off"))
 
     return newnode, newelem, None
-
-
-def build_command(opstr, node1, elem1, node2, elem2):
-    """
-    Build the command string for the boolean operation.
-
-    Args:
-        opstr: The operation string (e.g., 'union', 'diff').
-        node1: The first set of node coordinates.
-        elem1: The first set of elements.
-        node2: The second set of node coordinates.
-        elem2: The second set of elements.
-
-    Returns:
-        The command to be executed.
-    """
-    # Placeholder command construction for mesh operations
-    return f"./surfboolean_tool --operation {opstr} --input1 {node1} --elem1 {elem1} --input2 {node2} --elem2 {elem2}"
-
-
-def read_mesh(filename):
-    """Placeholder function to read a mesh file."""
-    # Actual implementation required to read .off or similar mesh file formats
-    return [], []
 
 
 def fillsurf(node, face):
