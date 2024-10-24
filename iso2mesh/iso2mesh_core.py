@@ -1946,3 +1946,145 @@ def vol2restrictedtri(vol, thres, cent, brad, ang, radbound, distbound, maxnode)
     node += 0.5
 
     return node, elem
+
+
+def meshresample(v, f, keepratio):
+    """
+    Resample mesh using the CGAL mesh simplification utility.
+
+    Parameters:
+    v : ndarray
+        List of nodes.
+    f : ndarray
+        List of surface elements (each row representing a triangle).
+    keepratio : float
+        Decimation rate, a number less than 1 representing the percentage of elements to keep after sampling.
+
+    Returns:
+    node : ndarray
+        Node coordinates of the resampled surface mesh.
+    elem : ndarray
+        Element list of the resampled surface mesh.
+    """
+
+    node, elem = domeshsimplify(v, f, keepratio)
+
+    if len(node) == 0:
+        print(
+            "Input mesh contains topological defects. Attempting to repair with meshcheckrepair..."
+        )
+        vnew, fnew = meshcheckrepair(v, f)
+        node, elem = domeshsimplify(vnew, fnew, keepratio)
+
+    # Remove duplicate nodes
+    node, I, J = np.unique(node, axis=0, return_index=True, return_inverse=True)
+    elem = J[elem]
+
+    saveoff(node, elem, mwpath("post_remesh.off"))
+
+    return node, elem
+
+
+def domeshsimplify(v, f, keepratio):
+    """
+    Perform the actual mesh resampling using CGAL's simplification utility.
+
+    Parameters:
+    v : ndarray
+        List of nodes.
+    f : ndarray
+        List of surface elements.
+    keepratio : float
+        Decimation rate, a number less than 1.
+
+    Returns:
+    node : ndarray
+        Node coordinates after simplification.
+    elem : ndarray
+        Element list after simplification.
+    """
+
+    exesuff = getexeext()
+    exesuff = fallbackexeext(exesuff, "cgalsimp2")
+
+    # Save the input mesh in OFF format
+    saveoff(v, f, mwpath("pre_remesh.off"))
+
+    # Delete the old remeshed file if it exists
+    deletemeshfile(mwpath("post_remesh.off"))
+
+    # Build and execute the command for CGAL simplification
+    cmd = f'"{mcpath("cgalsimp2")}{exesuff}" "{mwpath("pre_remesh.off")}" {keepratio} "{mwpath("post_remesh.off")}"'
+    status = subprocess.call(cmd, shell=True)
+
+    if status != 0:
+        raise RuntimeError("cgalsimp2 command failed")
+
+    # Read the resampled mesh
+    node, elem = readoff(mwpath("post_remesh.off"))
+
+    return node, elem
+
+
+def remeshsurf(node, face, opt):
+    """
+    remeshsurf(node, face, opt)
+
+    Remesh a triangular surface, output is guaranteed to be free of self-intersecting elements.
+    This function can both downsample or upsample a mesh.
+
+    Parameters:
+        node: list of nodes on the input surface mesh, 3 columns for x, y, z
+        face: list of triangular elements on the surface, [n1, n2, n3, region_id]
+        opt: function parameters
+            opt.gridsize: resolution for the voxelization of the mesh
+            opt.closesize: if there are openings, set the closing diameter
+            opt.elemsize: the size of the element of the output surface
+            If opt is a scalar, it defines the elemsize and gridsize = opt / 4
+
+    Returns:
+        newno: list of nodes on the resulting surface mesh, 3 columns for x, y, z
+        newfc: list of triangular elements on the surface, [n1, n2, n3, region_id]
+    """
+
+    # Step 1: convert the old surface to a volumetric image
+    p0 = np.min(node, axis=0)
+    p1 = np.max(node, axis=0)
+
+    if isinstance(opt, dict):
+        dx = opt.get("gridsize", None)
+    else:
+        dx = opt / 4
+
+    x_range = np.arange(p0[0] - dx, p1[0] + dx, dx)
+    y_range = np.arange(p0[1] - dx, p1[1] + dx)
+    z_range = np.arange(p0[2] - dx, p1[2] + dx)
+
+    img = surf2vol(node, face, x_range, y_range, z_range)
+
+    # Compute surface edges
+    eg = surfedge(face)
+
+    closesize = 0
+    if eg.size > 0 and isinstance(opt, dict):
+        closesize = opt.get("closesize", 0)
+
+    # Step 2: fill holes in the volumetric binary image
+    img = fillholes3d(img, closesize)
+
+    # Step 3: convert the filled volume to a new surface
+    if isinstance(opt, dict):
+        if "elemsize" in opt:
+            opt["radbound"] = opt["elemsize"] / dx
+            newno, newfc = v2s(img, 0.5, opt, "cgalsurf")
+    else:
+        opt = {"radbound": opt / dx}
+        newno, newfc = v2s(img, 0.5, opt, "cgalsurf")
+
+    # Adjust new nodes to match original coordinates
+    newno[:, 0:3] *= dx
+    newno[:, 0] += p0[0]
+    newno[:, 1] += p0[1]
+    newno[:, 2] += p0[2]
+
+    return newno, newfc

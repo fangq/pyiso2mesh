@@ -1173,3 +1173,78 @@ def extrudesurf(no, fc, vec):
     node, face = meshcheckrepair(node, face)
 
     return node, face
+
+
+def meshanellip(c0, rr, tsize, maxvol=None):
+    """
+    Create the surface and tetrahedral mesh of an ellipsoid.
+
+    Parameters:
+    c0 : list or ndarray
+        Center coordinates [x0, y0, z0] of the ellipsoid.
+    rr : list or ndarray
+        Radii of the ellipsoid. If rr is:
+            - Scalar: a sphere with radius rr.
+            - 1x3 or 3x1 vector: specifies the ellipsoid radii [a, b, c].
+            - 1x5 or 5x1 vector: specifies [a, b, c, theta, phi], where theta and phi are rotation angles along the z and x axes.
+    tsize : float
+        Maximum surface triangle size on the ellipsoid.
+    maxvol : float, optional
+        Maximum volume of the tetrahedral elements.
+
+    Returns:
+    node : ndarray
+        Node coordinates, 3 columns for x, y, and z respectively.
+    face : ndarray
+        Surface mesh face elements (each row has 3 vertices).
+    elem : ndarray, optional
+        Tetrahedral mesh elements (each row has 4 vertices).
+    """
+
+    rr = np.asarray(rr).flatten()
+
+    if len(rr) == 1:
+        rr = [rr[0], rr[0], rr[0]]  # Sphere case
+    elif len(rr) == 3:
+        pass  # Already in ellipsoid format
+    elif len(rr) != 5:
+        raise ValueError("Invalid rr length. See help for details.")
+
+    rmax = min(rr[:3])
+
+    if maxvol is None:
+        maxvol = tsize**3  # Set maxvol based on tsize if not provided
+
+    # Call meshunitsphere to generate unit sphere mesh
+    if maxvol:
+        node, face, elem = meshunitsphere(tsize / rmax, maxvol / (rmax**3))
+    else:
+        node, face = meshunitsphere(tsize / rmax)
+
+    # Scale the unit sphere to the ellipsoid
+    node = node @ np.diag(rr[:3])
+
+    if len(rr) == 5:
+        theta = rr[3]
+        phi = rr[4]
+
+        # Rotation matrices for theta (z-axis) and phi (x-axis)
+        Rz = np.array(
+            [
+                [np.cos(theta), np.sin(theta), 0],
+                [-np.sin(theta), np.cos(theta), 0],
+                [0, 0, 1],
+            ]
+        )
+
+        Rx = np.array(
+            [[1, 0, 0], [0, np.cos(phi), np.sin(phi)], [0, -np.sin(phi), np.cos(phi)]]
+        )
+
+        # Apply rotation to the node coordinates
+        node = (Rz @ (Rx @ node.T)).T
+
+    # Translate the ellipsoid to the center c0
+    node += np.array(c0).reshape(1, 3)
+
+    return node, face, elem if maxvol else (node, face)
