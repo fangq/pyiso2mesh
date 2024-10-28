@@ -87,6 +87,7 @@ def finddisconnsurf(f):
 
     return facecell
 
+#_________________________________________________________________________________________________________
 
 def surfedge(f, junction=0):
     """
@@ -94,7 +95,8 @@ def surfedge(f, junction=0):
 
     Parameters:
     f : numpy.ndarray
-        Input surface face element list, dimension (n, 3) or (n, 4).
+        Input surface facif f.size == 0:
+        return np.array([]), None
     junction : int, optional
         If set to 1, allows finding junctions (edges with more than two connected triangles).
 
@@ -108,42 +110,32 @@ def surfedge(f, junction=0):
     if f.size == 0:
         return np.array([]), None
 
-    # Create all the edges based on the dimensionality of elements (triangles or tetrahedrons)
+    findjunc = 0
+
     if f.shape[1] == 3:
-        edges = np.vstack([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]])
+        edges = np.vstack((f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]))  # create all the edges
     elif f.shape[1] == 4:
-        edges = np.vstack(
-            [f[:, [0, 1, 2]], f[:, [1, 0, 3]], f[:, [0, 2, 3]], f[:, [1, 3, 2]]]
-        )
+        edges = np.vstack((f[:, [0, 1, 2]], f[:, [1, 0, 3]], f[:, [0, 2, 3]], f[:, [1, 3, 2]]))  # create all the edges
     else:
-        raise ValueError(
-            "surfedge only supports 2D (triangles) and 3D (tetrahedrons) elements"
-        )
+        raise ValueError('surfedge only supports 2D and 3D elements')
 
-    # Sort each edge for uniqueness (since edge direction does not matter)
     edgesort = np.sort(edges, axis=1)
-
-    # Find unique edges
     _, ix, jx = np.unique(edgesort, axis=0, return_index=True, return_inverse=True)
 
-    # Histogram to count occurrences of each edge
-    vec = np.bincount(jx)
-
-    # Find open edges (edges that appear only once, or more if junctions are needed)
+    vec = np.bincount(jx, minlength=max(jx) + 1)
     if f.shape[1] == 3 and junction:
         qx = np.where(vec > 2)[0]
     else:
         qx = np.where(vec == 1)[0]
 
     openedge = edges[ix[qx], :]
-
-    # If element indices are requested, compute them
     elemid = None
-    if f.shape[1] == 3 and openedge.size > 0:
-        elemid = ix[qx]
+    if len(varargin) >= 2:
+        elemid, iy = np.unravel_index(ix[qx], f.shape)
 
     return openedge, elemid
 
+#_________________________________________________________________________________________________________
 
 def volface(t):
     """
@@ -165,6 +157,7 @@ def volface(t):
 
     return openface, elemid
 
+#_________________________________________________________________________________________________________
 
 def extractloops(edges):
     """
@@ -297,42 +290,27 @@ def meshconn(elem, nn):
 
     return conn, connnum, count
 
+#_________________________________________________________________________________________________________
 
-def meshcentroid(v, f):
+def meshcentroid(node, elem):
     """
-    Compute the centroids of a mesh defined by nodes and elements (surface or tetrahedra) in R^n space.
+    centroid=meshcentroid(v,f)
 
-    Parameters:
-    v : numpy.ndarray
-        Surface node list, dimension (nn, 3).
-    f : numpy.ndarray or list
-        Surface face element list, dimension (be, 3), or a cell array (list in Python) of elements.
+    compute the centroids of a mesh defined by nodes and elements
+    (surface or tetrahedra) in R^n space
 
-    Returns:
-    centroid : numpy.ndarray
-        Centroid positions, one row for each element.
+    input:
+          v: surface node list, dimension (nn,3)
+          f: surface face element list, dimension (be,3)
+
+    output:
+          centroid: centroid positions, one row for each element
     """
+    centroids = np.mean(node[elem[:elem.shape[0],:],:],axis=1)
 
-    if not isinstance(f, list):
-        # If f is not a list, treat it as a regular element array
-        ec = np.reshape(v[f[:, : f.shape[1]], :], (v.shape[1], f.shape[1], f.shape[0]))
-        centroid = np.mean(ec, axis=1).T
-    else:
-        # If f is a list (similar to a cell array in MATLAB)
-        len_f = len(f)
-        centroid = np.zeros((len_f, v.shape[1]))
+    return centroids
 
-        for i in range(len_f):
-            fc = f[i]
-            if fc is not None and len(fc) > 0:
-                vlist = fc[0]
-                valid_vlist = vlist[~np.isnan(vlist)]
-                centroid[i, :] = np.mean(v[valid_vlist.astype(int), :], axis=0)
-            else:
-                # Optionally set centroid to NaN if fc is empty
-                centroid[i, :] = np.nan
-
-    return centroid
+#_________________________________________________________________________________________________________
 
 
 def nodevolume(node, elem, evol=None):
@@ -375,6 +353,7 @@ def nodevolume(node, elem, evol=None):
 
     return nodevol
 
+#_________________________________________________________________________________________________________
 
 def elemvolume(node, elem, option=None):
     """
@@ -420,6 +399,7 @@ def elemvolume(node, elem, option=None):
 
     return vol
 
+#_________________________________________________________________________________________________________
 
 def neighborelem(elem, nn):
     """
@@ -875,6 +855,7 @@ def bbxflatsegment(node, edge):
 
     return mask
 
+#_________________________________________________________________________________________________________
 
 def surfplane(node, face):
     """
@@ -895,20 +876,21 @@ def surfplane(node, face):
     """
 
     # Compute vectors AB and AC from the triangle vertices
-    AB = node[face[:, 1], :] - node[face[:, 0], :]
-    AC = node[face[:, 2], :] - node[face[:, 0], :]
+    AB = node[face[:, 1], :3] - node[face[:, 0], :3]
+    AC = node[face[:, 2], :3] - node[face[:, 0], :3]
 
     # Compute normal vectors to the triangles using cross product
     N = np.cross(AB, AC)
 
     # Compute the plane's d coefficient by taking the dot product of normal vectors with vertex positions
-    d = -np.einsum("ij,ij->i", N, node[face[:, 0], :])
+    d = -np.dot(N, node[face[:, 0], :3].T)
 
     # Return the plane coefficients [a, b, c, d]
-    plane = np.hstack((N, d[:, np.newaxis]))
+    plane = np.column_stack((N, d))
 
     return plane
 
+#_________________________________________________________________________________________________________
 
 def surfinterior(node, face):
     """
@@ -1101,6 +1083,7 @@ def meshquality(node, elem, maxnode=4):
 
     return quality
 
+#_________________________________________________________________________________________________________
 
 def meshedge(elem, opt=None):
     """
@@ -1122,22 +1105,21 @@ def meshedge(elem, opt=None):
         ending node indices. The total number of edges is size(elem,1) x comb(size(elem,2),2).
         All edges are ordered by looping through each element.
     """
-
     # Determine element dimension and the combination of node pairs for edges
     dim = elem.shape
-    edgeid = list(combinations(range(dim[1]), 2))
-    len_edges = len(edgeid)
+    edgeid = np.array(list(combinations(range(dim[1]), 2)))
+    len_edges = edgeid.shape[0]
 
     # Initialize edge list
-    edges = np.zeros((dim[0] * len_edges, 2), dtype=int)
+    edges = np.zeros((dim[0] * len_edges, 2), dtype=elem.dtype)
 
     # Populate edges by looping through each element
     for i in range(len_edges):
-        edges[i * dim[0] : (i + 1) * dim[0], :] = np.vstack(
-            [elem[:, edgeid[i][0]], elem[:, edgeid[i][1]]]
-        ).T
+        edges[i * dim[0]:(i + 1) * dim[0], :] = np.column_stack((elem[:, edgeid[i, 0]], elem[:, edgeid[i, 1]]))
 
     return edges
+
+#_________________________________________________________________________________________________________
 
 
 def meshface(elem, opt=None):
@@ -1160,22 +1142,20 @@ def meshface(elem, opt=None):
         The total number of faces is size(elem,1) x comb(size(elem,2),3).
         All faces are ordered by looping through each element.
     """
-
     dim = elem.shape
-    faceid = list(combinations(range(dim[1]), 3))
-    len_faces = len(faceid)
+    faceid = np.array(list(combinations(range(dim[1]), 3)))
+    len_faces = faceid.shape[0]
 
     # Initialize face list
-    faces = np.zeros((dim[0] * len_faces, 3), dtype=int)
+    faces = np.zeros((dim[0] * len_faces, 3), dtype=elem.dtype)
 
     # Populate faces by looping through each element
     for i in range(len_faces):
-        faces[i * dim[0] : (i + 1) * dim[0], :] = np.vstack(
-            [elem[:, faceid[i][0]], elem[:, faceid[i][1]], elem[:, faceid[i][2]]]
-        ).T
+        faces[i * dim[0]:(i + 1) * dim[0], :] = np.array([elem[:, faceid[i, 0]], elem[:, faceid[i, 1]], elem[:, faceid[i, 2]]]).T
 
     return faces
 
+#_________________________________________________________________________________________________________
 
 def surfacenorm(node, face, normalize=True):
     """
@@ -1197,14 +1177,16 @@ def surfacenorm(node, face, normalize=True):
     """
 
     # Compute the normal vectors using surfplane (function must be defined)
-    snorm = surfplane(node, face)[:, :3]
+    snorm = surfplane(node, face)
+    snorm = snorm[:, :3]
 
     # Normalize the normal vectors if requested
     if normalize:
-        snorm = snorm / np.linalg.norm(snorm, axis=1)[:, np.newaxis]
+        snorm = snorm / np.sqrt(np.sum(snorm ** 2, axis=1, keepdims=True))
 
     return snorm
 
+#_________________________________________________________________________________________________________
 
 def nodesurfnorm(node, elem):
     """
@@ -1251,6 +1233,7 @@ def nodesurfnorm(node, elem):
 
     return nv
 
+#_________________________________________________________________________________________________________
 
 def uniqedges(elem):
     """
@@ -1281,19 +1264,17 @@ def uniqedges(elem):
         raise ValueError("Invalid input: element size not supported.")
 
     # Find unique edges and indices
-    sorted_edges = np.sort(edges, axis=1)
-    uedges, idx, jdx = np.unique(
-        sorted_edges, axis=0, return_index=True, return_inverse=True
-    )
+    uedges, idx, jdx = np.unique(np.sort(edges, axis=1), axis=0, return_index=True, return_inverse=True)
     edges = edges[idx, :]
 
     # Compute edgemap if requested
     edgemap = None
-    if elem.shape[1] > 2:
-        edgemap = jdx.reshape(elem.shape[0], -1)
+    edgemap = np.reshape(jdx, (elem.shape[0], np.array(list(combinations(range(elem.shape[1]), 2))).shape[0]))
+    edgemap = edgemap.T
 
     return edges, idx, edgemap
 
+#_________________________________________________________________________________________________________
 
 def uniqfaces(elem):
     """
@@ -1324,16 +1305,11 @@ def uniqfaces(elem):
         raise ValueError("Invalid input: element size not supported.")
 
     # Find unique faces and their indices
-    sorted_faces = np.sort(faces, axis=1)
-    ufaces, idx, jdx = np.unique(
-        sorted_faces, axis=0, return_index=True, return_inverse=True
-    )
+    ufaces, idx, jdx = np.unique(np.sort(faces, axis=1), axis=0, return_index=True, return_inverse=True)
     faces = faces[idx, :]
 
     # Compute facemap if requested
-    facemap = None
-    if elem.shape[1] > 3:
-        facemap = jdx.reshape(elem.shape[0], -1)
+    facemap = np.reshape(jdx, (elem.shape[0], np.array(list(combinations(range(elem.shape[1]), 3))).shape[0]),order='F')
 
     return faces, idx, facemap
 
