@@ -1,8 +1,26 @@
+"""@package docstring
+Iso2Mesh for Python - Mesh data queries and manipulations
+
+Copyright (c) 2024 Qianqian Fang <q.fang at neu.edu>
+"""
+__all__ = [
+    "surf2mesh",
+]
+
+##====================================================================================
+## dependent libraries
+##====================================================================================
+
 import numpy as np
 import os
 import re
 import platform
 import subprocess
+import iso2mesh as im
+
+##====================================================================================
+## implementations
+##====================================================================================
 
 
 def v2m(img, isovalues, opt=None, maxvol=None, method=None):
@@ -377,20 +395,10 @@ def vol2surf(img, ix, iy, iz, opt, dofix=0, method="cgalsurf", isovalues=None):
 
     return no, el, regions, holes
 
+#_________________________________________________________________________________________________________
 
-def surf2mesh(
-    v,
-    f,
-    p0,
-    p1,
-    keepratio,
-    maxvol,
-    regions=None,
-    holes=None,
-    forcebox=0,
-    method="tetgen",
-    cmdopt=None,
-):
+def surf2mesh(v,f,p0,p1,keepratio,maxvol,regions=None,holes=None,dobbx=0,method="tetgen",cmdopt=None):
+
     """
     Create a quality volumetric mesh from isosurface patches.
 
@@ -412,11 +420,12 @@ def surf2mesh(
     elem: element list of the tetrahedral mesh.
     face: mesh surface element list, with the last column denoting the boundary ID.
     """
-
     if keepratio > 1 or keepratio < 0:
         print(
             'The "keepratio" parameter must be between 0 and 1. No simplification will be performed.'
         )
+
+    exesuff = im.getexeext()
 
     # Resample surface mesh if keepratio is less than 1
     if keepratio < 1 and not isinstance(f, list):
@@ -429,25 +438,28 @@ def surf2mesh(
 
     # Handle regions and holes arguments
     if regions is None:
-        regions = []
+        regions = np.array([]) #[]
     if holes is None:
-        holes = []
+        holes = np.array([])
 
     # Warn if both maxvol and region-based volume constraints are specified
-    if regions.shape[1] >= 4 and maxvol is not None:
-        print(
-            "Warning: Both maxvol and region-based volume constraints are specified. maxvol will be ignored."
-        )
+    if len(regions) > 1 and regions.shape[1] >= 4 and maxvol is not None:
+        print("Warning: Both maxvol and region-based volume constraints are specified. maxvol will be ignored.")
         maxvol = None
-
-    dobbx = forcebox
 
     # Dump surface mesh to .poly file format
     if not isinstance(el, list) and no.size and el.size:
-        saveoff(no[:, :3], el[:, :3], "post_vmesh.off")
+        im.saveoff(no[:, :3], el[:, :3], "post_vmesh.off")
+    im.deletemeshfile(mwpath('post_vmesh.mtr'))
+    im.savesurfpoly(no, el, holes, regions, p0, p1, mwpath("post_vmesh.poly"),forcebox=dobbx)
 
+    moreopt = ''
+    if len(no.shape) > 1 and no.shape[1] == 4:
+        moreopt = moreopt + ' -m '
     # Generate volumetric mesh from surface mesh
+    im.deletemeshfile(im.mwpath('post_vmesh.1.*'))
     print("Creating volumetric mesh from surface mesh...")
+
     if cmdopt is None:
         try:
             cmdopt = eval("ISO2MESH_TETGENOPT")
@@ -455,21 +467,21 @@ def surf2mesh(
             cmdopt = ""
 
     if not cmdopt:
-        tatus, cmdout = subprocess.getstatusoutput(
-            f"{method} -A -q1.414a{maxvol} post_vmesh.poly"
-        )
+        print(im.mcpath('tetgen',exesuff))
+        status, cmdout = subprocess.getstatusoutput('"' + im.mcpath('tetgen',exesuff) + '"'+ ' -A -q1.414a' + str(maxvol) + ' '+ moreopt + ' ' + mwpath('post_vmesh.poly'))
     else:
-        tatus, cmdout = subprocess.getstatusoutput(f"{method} {cmdopt} post_vmesh.poly")
+        status, cmdout = subprocess.getstatusoutput(f"{method} {cmdopt} post_vmesh.poly")
 
     if status != 0:
         raise RuntimeError(f"Tetgen command failed:\n{cmdout}")
 
     # Read generated mesh
-    node, elem, face = readtetgen("post_vmesh.1")
+    node, elem, face = im.readtetgen(mwpath("post_vmesh.1"))
 
     print("Volume mesh generation complete")
     return node, elem, face
 
+#_________________________________________________________________________________________________________
 
 def smoothsurf(
     node, mask, conn, iter, useralpha=0.5, usermethod="laplacian", userbeta=0.5
@@ -1911,13 +1923,13 @@ def vol2restrictedtri(vol, thres, cent, brad, ang, radbound, distbound, maxnode)
             "You are meshing the surface with sub-pixel size. Check if opt.radbound is set correctly."
         )
 
-    exesuff = fallbackexeext(getexeext(), "cgalsurf")
+    exesuff = im.getexeext()
 
     # Save the input volume in .inr format
-    saveinr(vol, mwpath("pre_extract.inr"))
+    im.saveinr(vol, mwpath("pre_extract.inr"))
 
     # Delete previous output mesh file if exists
-    deletemeshfile(mwpath("post_extract.off"))
+    im.deletemeshfile(mwpath("post_extract.off"))
 
     # Random seed
     randseed = os.getenv("ISO2MESH_SESSION", int("623F9A9E", 16))
@@ -1926,7 +1938,7 @@ def vol2restrictedtri(vol, thres, cent, brad, ang, radbound, distbound, maxnode)
 
     # Build the system command to run CGAL mesher
     cmd = (
-        f'"{mcpath("cgalsurf")}{exesuff}" "{mwpath("pre_extract.inr")}" '
+        f'"{im.mcpath("cgalsurf",exesuff)}" "{im.mwpath("pre_extract.inr")}" '
         f"{thres:.16f} {cent[0]:.16f} {cent[1]:.16f} {cent[2]:.16f} {brad:.16f} {ang:.16f} {radbound:.16f} "
         f'{distbound:.16f} {maxnode} "{mwpath("post_extract.off")}" {randseed} {initnum}'
     )

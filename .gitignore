@@ -1,0 +1,5 @@
+
+*.pyc
+.idea/*
+iso2mesh/.idea/*
+test.py

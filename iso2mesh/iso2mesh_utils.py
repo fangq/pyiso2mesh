@@ -243,6 +243,7 @@ def extractloops(edges):
 
     return loops
 
+#_________________________________________________________________________________________________________
 
 def meshconn(elem, nn):
     """
@@ -266,13 +267,10 @@ def meshconn(elem, nn):
     # Initialize conn as a list of empty lists
     conn = [[] for _ in range(nn)]
     dim = elem.shape
-
     # Loop through each element and populate the conn list
     for i in range(dim[0]):
         for j in range(dim[1]):
-            conn[elem[i, j] - 1].extend(
-                elem[i, :]
-            )  # Adjust for 0-based indexing in Python
+            conn[elem[i, j]].extend(elem[i, :])  # Adjust for 0-based indexing in Python
 
     count = 0
     connnum = np.zeros(nn, dtype=int)
@@ -403,23 +401,18 @@ def elemvolume(node, elem, option=None):
 
 def neighborelem(elem, nn):
     """
-    Create a node neighbor list from a mesh.
+    create node neighbor list from a mesh
 
-    Parameters:
-    elem : numpy.ndarray
-        Element table of the mesh, where each row represents an element and its node indices.
-    nn : int
-        Total number of nodes in the mesh.
+    input:
+       elem:  element table of a mesh
+       nn  :  total node number of the mesh
 
-    Returns:
-    conn : list
-        A list of length `nn`, where each element is a list of all neighboring element IDs for each node.
-    connnum : numpy.ndarray
-        A vector of length `nn`, indicating the number of neighboring elements for each node.
-    count : int
-        Total number of neighboring elements across all nodes.
+    output:
+       conn:  output, a list of length nn, conn[n]
+              contains a list of all neighboring elem ID for node n
+       connnum: list of length nn, denotes the neighbor number of each node
+       count: total neighbor numbers
     """
-
     # Initialize conn as a list of empty lists
     conn = [[] for _ in range(nn)]
     dim = elem.shape
@@ -427,12 +420,11 @@ def neighborelem(elem, nn):
     # Loop through each element and populate the conn list
     for i in range(dim[0]):
         for j in range(dim[1]):
-            conn[elem[i, j] - 1].append(i + 1)  # Adjust for 0-based indexing
-
-    count = 0
-    connnum = np.zeros(nn, dtype=int)
+            conn[elem[i, j]].append(i + 1)  # Adjusting for 0-based index in Python
 
     # Loop through each node to sort neighbors and calculate total counts
+    count = 0
+    connnum = [0] * nn
     for i in range(nn):
         conn[i] = sorted(conn[i])
         connnum[i] = len(conn[i])
@@ -440,6 +432,7 @@ def neighborelem(elem, nn):
 
     return conn, connnum, count
 
+#_________________________________________________________________________________________________________
 
 def layersurf(elem, **kwargs):
     """
@@ -508,6 +501,7 @@ def layersurf(elem, **kwargs):
 
     return face, labels
 
+#_________________________________________________________________________________________________________
 
 def faceneighbors(t, opt=None):
     """
@@ -528,23 +522,18 @@ def faceneighbors(t, opt=None):
              sharing triangular faces [1 2 3], [1 2 4], [1 3 4], and
              [2 3 4]. A 0 indicates no neighbor (i.e., boundary face).
     """
+    print(type(t))
     # Generate faces from tetrahedral elements
-    faces = np.hstack(
+    faces = np.vstack(
         (t[:, [0, 1, 2]], t[:, [0, 1, 3]], t[:, [0, 2, 3]], t[:, [1, 2, 3]])
     )
     faces = np.sort(faces, axis=1)
 
     # Find unique faces and their indices
-    _, ix, jx = np.unique(faces, axis=0, return_inverse=True)
+    _, ix, jx = np.unique(faces, axis=0, return_index=True, return_inverse=True)
 
-    # Determine the system being used
-    isoctavemesh = False  # Adjust this based on your environment
-    if isoctavemesh:
-        u = np.unique(jx)
-        qx = u[np.histogram(jx, bins=np.arange(max(jx) + 2))[0] == 2]
-    else:
-        vec = np.histogram(jx, bins=np.arange(max(jx) + 2))[0]
-        qx = np.where(vec == 2)[0]
+    vec = np.histogram(jx, bins=np.arange(max(jx) + 2))[0]
+    qx = np.where(vec == 2)[0]
 
     nn = np.max(t)
     ne = t.shape[0]
@@ -552,33 +541,38 @@ def faceneighbors(t, opt=None):
 
     # Identify duplicate faces and their element pairings
     ujx, ii = np.unique(jx, return_index=True)
-    _, ii2 = np.unique(jx, return_index=True)
+    jx2 = jx[::-1]
+    _, ii2 = np.unique(jx2, return_index=True)
+    ii2 = len(jx2)-1-ii2
 
     # List of element pairs that share a common face
     iddup = np.vstack((ii[qx], ii2[qx])).T
-    faceid = np.ceil(iddup / ne).astype(int)
-    eid = np.mod(iddup, ne)
+    faceid = np.ceil((iddup+1) / ne).astype(int)
+    eid = np.mod(iddup+1, ne)
     eid[eid == 0] = ne
 
-    # Rearrange the list into an element format
-    for i in range(len(qx)):
-        facenb[eid[i, 0] - 1, faceid[i, 0] - 1] = eid[i, 1]
-        facenb[eid[i, 1] - 1, faceid[i, 1] - 1] = eid[i, 0]
-
-    # 0s in facenb indicate boundary faces with no neighbors
     # Handle special cases based on the second argument
     if opt is not None:
+        for i in range(len(qx)):
+          facenb[eid[i, 0] - 1, faceid[i, 0] - 1] = eid[i, 1]
+          facenb[eid[i, 1] - 1, faceid[i, 1] - 1] = eid[i, 0]
         if opt == "surface":
-            facenb = faces[np.where(facenb == 0)[0], :]
+            facenb = faces[np.where(facenb.T.flatten() == 0)[0], :]
         elif opt == "rowmajor":
-            index = np.arange(len(faces)).reshape(-1, 4).T.flatten()
+            index = np.arange(len(faces)).reshape(4,-1).T.flatten()
+            print(index)
             faces = faces[index, :]
-            facenb = faces[np.where(facenb.T == 0)[0], :]
+            facenb = faces[np.where(facenb.flatten() == 0)[0], :]
         else:
             raise ValueError(f'Unsupported option "{opt}".')
+    else:
+        for i in range(len(qx)):
+            facenb[eid[i, 0] - 1, faceid[i, 0] - 1] = eid[i, 1] - 1
+            facenb[eid[i, 1] - 1, faceid[i, 1] - 1] = eid[i, 0] - 1
 
     return facenb
 
+#_________________________________________________________________________________________________________
 
 def edgeneighbors(t, opt=None):
     """
@@ -608,16 +602,15 @@ def edgeneighbors(t, opt=None):
 
     ne = t.shape[0]  # Number of triangles
     if opt == "general":
-        edgenb = [np.where(jx == jx[i])[0] for i in range(len(jx))]
+        edgenb = [np.unique(np.mod(np.where((jx == jx[i]) | (jx == jx[i + ne]) | (jx == jx[i + 2 * ne]))[0], ne)) for i in range(ne)]
         return [np.setdiff1d(nb, [i]) for i, nb in enumerate(edgenb)]
 
     # Determine boundary neighbors
     vec = np.bincount(jx)
-    qx = np.where(vec == 2)[
-        0
-    ]  # Get indices where edges are shared by exactly 2 triangles
+    qx = np.where(vec == 2)[0]  # Get indices where edges are shared by exactly 2 triangles
 
     edgenb = np.zeros_like(t)
+
     ujx, first_idx = np.unique(jx, return_index=True)
     _, last_idx = np.unique(jx[::-1], return_index=True)
     last_idx = len(jx) - last_idx - 1
@@ -626,16 +619,18 @@ def edgeneighbors(t, opt=None):
     iddup = np.vstack([first_idx[qx], last_idx[qx]]).T
     faceid = (iddup // ne) + 1
     eid = iddup % ne
+    eid += 1
     eid[eid == 0] = ne
 
     # Assign neighboring elements
     for i in range(len(qx)):
-        edgenb[eid[i, 0], faceid[i, 0]] = eid[i, 1]
-        edgenb[eid[i, 1], faceid[i, 1]] = eid[i, 0]
+        edgenb[eid[i, 0] - 1, faceid[i, 0] - 1] = eid[i, 1] - 1
+        edgenb[eid[i, 1] - 1, faceid[i, 1] - 1] = eid[i, 0] - 1
 
     # Handle boundary edges (where no neighbor exists)
     return edgenb
 
+#_________________________________________________________________________________________________________
 
 def maxsurf(facecell, node=None):
     """
@@ -1545,29 +1540,30 @@ def setdiff(A, B):
     return A[~np.in1d(A_view, B_view)]
 
 
+#_________________________________________________________________________________________________________
+
 def meshreorient(node, elem):
     """
-    Reorder nodes in a surface or tetrahedral mesh to ensure all elements
-    are oriented consistently.
+    Reorder nodes in a surface or tetrahedral mesh to ensure all
+    elements are oriented consistently.
 
     Parameters:
-    node: Node coordinates (Nx3 array for x, y, z)
-    elem: Element list (Mx3 or Mx4 array for surface or volume elements)
+        node: list of nodes
+        elem: list of elements (each row are indices of nodes of each element)
 
     Returns:
-    newelem: Element list with consistent ordering
-    evol: Signed element volume before reorientation
-    idx: Indices of the elements that had negative volume
+        newelem: the element list with consistent ordering
+        evol: the signed element volume before reorientation
+        idx: indices of the elements that had negative volume
     """
 
-    # Calculate the signed volume of the elements
-    evol = elemvolume(node, elem, "signed")
-
-    # Find elements with negative volume
+    # Calculate the canonical volume of the element (can be a 2D or 3D)
+    evol = elemvolume(node, elem, 'signed')
+    # Make sure all elements are positive in volume
     idx = np.where(evol < 0)[0]
-
-    # Reorder the last two nodes for elements with negative volume
-    elem[idx, [-2, -1]] = elem[idx, [-1, -2]]
-
+    elem[idx[:,np.newaxis], np.tile(np.array([-2, -1]), (len(idx),2))] = elem[idx[:,np.newaxis], np.tile(np.array([-1, -2]), (len(idx),2))]
     newelem = elem
+
     return newelem, evol, idx
+
+#_________________________________________________________________________________________________________
