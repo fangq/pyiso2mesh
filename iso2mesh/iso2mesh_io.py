@@ -570,7 +570,7 @@ def savesurfpoly(v, f, holelist, regionlist, p0, p1, fname, forcebox=None):
     node = v
     bbxnum, loopvert, loopid, loopnum = 0, [], [], 1
 
-    if edges.size > 0:
+    if len(edges) > 0:
         loops = im.extractloops(edges)
         if len(loops) < 3:
             raise ValueError('Degenerated loops detected')
@@ -609,11 +609,11 @@ def savesurfpoly(v, f, holelist, regionlist, p0, p1, fname, forcebox=None):
                     v[subloop, bf] = p1[bf]
                     loopid[i] = bf + 3
 
-    if dobbx and edges.size == 0:
+    if dobbx and len(edges) == 0:
         bbxnum = 6
         loopcount = np.zeros(bbxnum)
 
-    if dobbx or edges.size > 0:
+    if dobbx or len(edges) > 0:
         nn = v.shape[0]
         boxnode = np.array([
             p0,
@@ -665,17 +665,17 @@ def savesurfpoly(v, f, holelist, regionlist, p0, p1, fname, forcebox=None):
                 if not isinstance(f[i], list):
                     totalplc += f[i].shape[0]
                 else:
-                    totalplc += f[i][0].shape[0]
+                    totalplc += len(f[i][0])#.shape[0]
             fp.write('#facet list\n{} 1\n'.format(totalplc + bbxnum))
             for i in range(len(f)):
                 plcs = f[i]
                 faceid = -1
                 if isinstance(plcs, list):  # if each face is a cell, use plc{2} for face id
                     if len(plcs) > 1:
-                        faceid = plcs[1]
+                        faceid = int(plcs[1][0])
                     plcs = plcs[0]
-                for row in range(plcs.shape[0]):
-                    plc = plcs[row, :]
+                for row in range(len(plcs)):
+                    plc = np.array(plcs[row])
                     if np.any(np.isnan(plc)):  # we use nan to separate outer contours and holes
                         holeid = np.where(np.isnan(plc))[0]
                         if faceid > 0:
@@ -700,7 +700,7 @@ def savesurfpoly(v, f, holelist, regionlist, p0, p1, fname, forcebox=None):
                             fp.write('1 0 {}\n{}'.format(faceid, len(plc)))
                         else:
                             fp.write('1 0\n{}'.format(len(plc)))
-                        fp.write('\t{}'.format('\t'.join(map(str, plc - 1))))
+                        fp.write('\t{}'.format('\t'.join(map(str, plc))))
                         fp.write('\t1\n')
 
         if dobbx or edges:

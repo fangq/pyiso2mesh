@@ -662,19 +662,20 @@ def meshacylinder(c0, c1, r, tsize=0, maxvol=0, ndiv=20):
     pp = np.vstack((p0, p1))
     no = im.rotatevec3d(pp, v0.T) + np.tile(c0.T, (pp.shape[0], 1))
 
+    #face = np.empty((0,4))
     face = []
     for i in range(ndiv - 1):
-        face.append(list([i, i + ndiv, i + ndiv + 1, i + 1]).append(list([0])))
-    print(face)
-    face.append([ndiv - 1, 2 * ndiv - 1, ndiv, 0])
-    face.append(list(range(ndiv)))
-    face.append(list(range(ndiv, 2 * ndiv)))
+        #face = np.vstack((face, np.array([i, i + ndiv, i + ndiv + 1, i + 1])))
+        face.append([[[i, i + ndiv, i + ndiv + 1, i + 1]], [1]])
+
+    face.append([[[ndiv - 1, 2 * ndiv - 1, ndiv, 0]], [1]])
+    face.append([[list(range(ndiv))],[3]])
+    face.append([[list(range(ndiv, 2 * ndiv))], [3]])
 
     if tsize == 0 and maxvol == 0:
         return no, face
 
-    print(no,face)
-    node, elem = im.surf2mesh(no, face, np.min(no, axis=0), np.max(no, axis=0), 1, maxvol)
+    node, elem, face = im.surf2mesh(no, face, np.min(no, axis=0), np.max(no, axis=0), 1, maxvol)
     return node, face, elem
 
 #_________________________________________________________________________________________________________
