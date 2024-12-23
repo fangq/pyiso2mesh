@@ -17,6 +17,7 @@ from .iso2mesh_primitive import (
     meshabox,
     meshacylinder,
     meshanellip,
+    meshunitsphere,
 )
 
 from .iso2mesh_utils import  (
@@ -71,10 +72,13 @@ from .iso2mesh_io import (
     readtetgen,
     savesurfpoly,
     mcpath,
+    readoff,
 )
 
 from .iso2mesh_core import (
     surf2mesh,
+    vol2restrictedtri,
+    removeisolatednode,
 )
 __version__ = "0.1.0"
 __all__ = [
@@ -139,5 +143,9 @@ __all__ = [
     "meshanellip",
     "surf2mesh",
     "rotatevec3d",
+    "readoff",
+    "vol2restrictedtri",
+    "removeisolatednode",
+    "meshunitsphere",
 ]
 __license__ = """GNU General Public License v3 and later"""

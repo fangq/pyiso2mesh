@@ -21,6 +21,7 @@ __all__ = [
     "meshabox",
     "meshacylinder",
     "meshanellip",
+    "meshunitsphere",
 ]
 
 ##====================================================================================
@@ -584,7 +585,8 @@ def meshabox(p0, p1, opt, nodesize=1):
 
 #_________________________________________________________________________________________________________
 
-def meshunitsphere(tsize, maxvol=None):
+def meshunitsphere(tsize, **kwargs):
+
     dim = 60
     esize = tsize * dim
     thresh = dim / 2 - 1
@@ -608,7 +610,7 @@ def meshunitsphere(tsize, maxvol=None):
     r0 = np.sqrt(np.sum(node**2, axis=1))
     node = node / r0[:, None]
 
-    if maxvol is None:
+    if not 'maxvol' in kwargs:
         maxvol = tsize**3
 
     # Call a surf2mesh equivalent in Python here (needs a custom function)
@@ -618,6 +620,7 @@ def meshunitsphere(tsize, maxvol=None):
 
     return node, face, elem
 
+#_________________________________________________________________________________________________________
 
 def meshasphere(c0, r, tsize, maxvol=None):
     if maxvol is None:

@@ -18,6 +18,7 @@ __all__ = [
     "readtetgen",
     "savesurfpoly",
     "mcpath",
+    "readoff",
 ]
 
 ##====================================================================================
@@ -358,39 +359,43 @@ def readmedit(filename):
 
 #_________________________________________________________________________________________________________
 
-def mwpath(fname=''):
+def mwpath(fname=""):
     """
-    Get full temp-file name by prepending working-directory and current session name.
+    Get the full temporary file path by prepending the working directory
+    and current session name.
 
     Parameters:
-        fname (str): Input file name string.
+    fname : str, optional
+        Input file name string (default is empty string).
 
     Returns:
-        str: Full file name located in the working directory.
+    tempname : str
+        Full file name located in the working directory.
     """
 
-    session = ''
+    # Retrieve the ISO2MESH_TEMP and ISO2MESH_SESSION environment variables
+    p = os.getenv("ISO2MESH_TEMP")
+    session = os.getenv("ISO2MESH_SESSION", "")
 
-    username = os.getenv('USER')  # for Linux/Unix/Mac OS
-
-    if username is None:
-        username = os.getenv('UserName')  # for Windows
-
+    # Get the current user's name for Linux/Unix/Mac/Windows
+    username = os.getenv("USER") or os.getenv("UserName", "")
     if username:
-        username = f'iso2mesh-{username}'
+        username = f"iso2mesh-{username}"
 
-    tempname = ''
-    tdir = os.path.join(tempfile.gettempdir(), '')
-    if not tdir.endswith(os.sep):
-        tdir += os.sep
-    if username:
-        tdir = os.path.join(tdir, username)
-        if not os.path.exists(tdir):
-            os.makedirs(tdir)
-    if fname == '':
-        tempname = tdir
-    else:
+    tempname = ""
+
+    if not p:
+        tdir = os.path.abspath(
+            os.path.join(os.sep, "tmp")
+        )  # Use default temp directory
+        if username:
+            tdir = os.path.join(tdir, username)
+            if not os.path.exists(tdir):
+                os.makedirs(tdir)
+
         tempname = os.path.join(tdir, session, fname)
+    else:
+        tempname = os.path.join(p, session, fname)
 
     return tempname
 
@@ -744,3 +749,76 @@ def savesurfpoly(v, f, holelist, regionlist, p0, p1, fname, forcebox=None):
 
 #_________________________________________________________________________________________________________
 
+def readoff(fname):
+    """
+    Read Geomview Object File Format (OFF)
+
+    Parameters:
+        fname: name of the OFF data file
+
+    Returns:
+        node: node coordinates of the mesh
+        elem: list of elements of the mesh
+    """
+
+    node = []
+    elem = []
+
+    with open(fname, 'rb') as fid:
+        line = fid.readline().decode('utf-8').strip()
+        dim = np.fromstring(line[4:], sep=' ', count=3, dtype=int)
+        print(dim)
+
+        line = nonemptyline(fid)
+        if dim.size != 3:
+            dim = np.fromstring(line, sep=' ', count=3, dtype=int)
+            line = nonemptyline(fid)
+
+        nodalcount = 3
+        if line:
+            val, nodalcount = np.fromstring(line, sep=' ', count=nodalcount, dtype=float), nodalcount
+        else:
+            return node, elem
+
+        node = np.fromfile(fid, dtype=float, count=(nodalcount * (dim[0] - 1))).reshape(-1, nodalcount)
+        node = np.vstack((val, node))
+
+        line = nonemptyline(fid)
+        facetcount = 4
+        if line:
+            val, facetcount = np.fromstring(line, sep=' ', count=facetcount, dtype=float), facetcount
+        else:
+            return node, elem
+
+        elem = np.fromfile(fid, dtype=float, count=(facetcount * (dim[1] - 1))).reshape(-1, facetcount)
+        elem = np.vstack((val, elem))
+
+    elem = elem[:, 1:]
+
+    if elem.shape[1] <= 3:
+        elem[:, :3] = np.round(elem[:, :3]) + 1
+    else:
+        elem[:, :4] = np.round(elem[:, :4]) + 1
+
+    return node, elem
+
+"""
+def nonemptyline(fid):
+    line = fid.readline().decode('utf-8').strip()
+    while not line:
+        line = fid.readline().decode('utf-8').strip()
+    return line
+"""
+
+def nonemptyline(fid):
+    str_ = ''
+    if fid == 0:
+        raise ValueError('invalid file')
+
+    while (not re.search(r'\S', str_) or re.search(r'^#', str_)) and not fid.closed:
+        str_ = fid.readline()
+        if not isinstance(str_, str):
+            str_ = ''
+            return str_
+
+    return str_

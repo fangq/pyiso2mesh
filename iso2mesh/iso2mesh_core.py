@@ -5,6 +5,8 @@ Copyright (c) 2024 Qianqian Fang <q.fang at neu.edu>
 """
 __all__ = [
     "surf2mesh",
+    "vol2restrictedtri",
+    "removeisolatednode",
 ]
 
 ##====================================================================================
@@ -450,7 +452,7 @@ def surf2mesh(v,f,p0,p1,keepratio,maxvol,regions=None,holes=None,dobbx=0,method=
     # Dump surface mesh to .poly file format
     if not isinstance(el, list) and no.size and el.size:
         im.saveoff(no[:, :3], el[:, :3], "post_vmesh.off")
-    im.deletemeshfile(mwpath('post_vmesh.mtr'))
+    im.deletemeshfile(im.mwpath('post_vmesh.mtr'))
     im.savesurfpoly(no, el, holes, regions, p0, p1, mwpath("post_vmesh.poly"),forcebox=dobbx)
 
     moreopt = ''
@@ -476,7 +478,7 @@ def surf2mesh(v,f,p0,p1,keepratio,maxvol,regions=None,holes=None,dobbx=0,method=
         raise RuntimeError(f"Tetgen command failed:\n{cmdout}")
 
     # Read generated mesh
-    node, elem, face = im.readtetgen(mwpath("post_vmesh.1"))
+    node, elem, face = im.readtetgen(im.mwpath("post_vmesh.1"))
 
     print("Volume mesh generation complete")
     return node, elem, face
@@ -1848,47 +1850,6 @@ def mcpath(fname, ext=None):
     return binname
 
 
-def mwpath(fname=""):
-    """
-    Get the full temporary file path by prepending the working directory
-    and current session name.
-
-    Parameters:
-    fname : str, optional
-        Input file name string (default is empty string).
-
-    Returns:
-    tempname : str
-        Full file name located in the working directory.
-    """
-
-    # Retrieve the ISO2MESH_TEMP and ISO2MESH_SESSION environment variables
-    p = os.getenv("ISO2MESH_TEMP")
-    session = os.getenv("ISO2MESH_SESSION", "")
-
-    # Get the current user's name for Linux/Unix/Mac/Windows
-    username = os.getenv("USER") or os.getenv("UserName", "")
-    if username:
-        username = f"iso2mesh-{username}"
-
-    tempname = ""
-
-    if not p:
-        tdir = os.path.abspath(
-            os.path.join(os.sep, "tmp")
-        )  # Use default temp directory
-        if username:
-            tdir = os.path.join(tdir, username)
-            if not os.path.exists(tdir):
-                os.makedirs(tdir)
-
-        tempname = os.path.join(tdir, session, fname)
-    else:
-        tempname = os.path.join(p, session, fname)
-
-    return tempname
-
-
 def vol2restrictedtri(vol, thres, cent, brad, ang, radbound, distbound, maxnode):
     """
     Surface mesh extraction using CGAL mesher.
@@ -1926,10 +1887,10 @@ def vol2restrictedtri(vol, thres, cent, brad, ang, radbound, distbound, maxnode)
     exesuff = im.getexeext()
 
     # Save the input volume in .inr format
-    im.saveinr(vol, mwpath("pre_extract.inr"))
+    im.saveinr(vol, im.mwpath("pre_extract.inr"))
 
     # Delete previous output mesh file if exists
-    im.deletemeshfile(mwpath("post_extract.off"))
+    im.deletemeshfile(im.mwpath("post_extract.off"))
 
     # Random seed
     randseed = os.getenv("ISO2MESH_SESSION", int("623F9A9E", 16))
@@ -1937,10 +1898,11 @@ def vol2restrictedtri(vol, thres, cent, brad, ang, radbound, distbound, maxnode)
     initnum = os.getenv("ISO2MESH_INITSIZE", 50)
 
     # Build the system command to run CGAL mesher
+    print(im.mwpath("pre_extract.inr"))
     cmd = (
         f'"{im.mcpath("cgalsurf",exesuff)}" "{im.mwpath("pre_extract.inr")}" '
         f"{thres:.16f} {cent[0]:.16f} {cent[1]:.16f} {cent[2]:.16f} {brad:.16f} {ang:.16f} {radbound:.16f} "
-        f'{distbound:.16f} {maxnode} "{mwpath("post_extract.off")}" {randseed} {initnum}'
+        f'{distbound:.16f} {maxnode} "{im.mwpath("post_extract.off")}" {randseed} {initnum}'
     )
 
     # Execute the system command
@@ -1949,10 +1911,11 @@ def vol2restrictedtri(vol, thres, cent, brad, ang, radbound, distbound, maxnode)
         raise RuntimeError(f"CGAL mesher failed with command: {cmd}")
 
     # Read the resulting mesh
-    node, elem = readoff(mwpath("post_extract.off"))
+    node, elem = im.readoff(im.mwpath("post_extract.off"))
+    print(node,elem)
 
     # Check and repair mesh if needed
-    node, elem = meshcheckrepair(node, elem)
+    # node, elem = meshcheckrepair(node, elem)
 
     # Assuming the origin [0, 0, 0] is located at the lower-bottom corner of the image
     node += 0.5
