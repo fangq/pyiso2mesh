@@ -467,9 +467,8 @@ def surf2mesh(v,f,p0,p1,keepratio,maxvol,regions=None,holes=None,dobbx=0,method=
             cmdopt = ""
 
     if not cmdopt:
-        print(im.mcpath('tetgen',exesuff))
-        print(mwpath('post_vmesh.poly'))
-        status, cmdout = subprocess.getstatusoutput('"' + im.mcpath('tetgen',exesuff) + '"'+ ' -A -q1.414a' + str(maxvol) + ' '+ moreopt + ' ' + mwpath('post_vmesh.poly'))
+        print(im.mcpath(method,exesuff))
+        status, cmdout = subprocess.getstatusoutput('"' + im.mcpath(method,exesuff) + '"'+ ' -A -q1.414a' + str(maxvol) + ' '+ moreopt + ' ' + mwpath('post_vmesh.poly'))
     else:
         status, cmdout = subprocess.getstatusoutput(f"{method} {cmdopt} post_vmesh.poly")
 

@@ -598,12 +598,12 @@ def meshunitsphere(tsize, maxvol=None):
     dist[dist < 0] = 0
 
     # Call a vol2restrictedtri equivalent in Python here (needs a custom function)
-    node, face = vol2restrictedtri(
+    node, face = im.vol2restrictedtri(
         dist, 1, (dim, dim, dim), dim**3, 30, esize, esize, 40000
     )
 
     node = (node - 0.5) * 0.5
-    node, face = removeisolatednode(node, face)
+    node, face = im.removeisolatednode(node, face)
     node = (node - 30) / 28
     r0 = np.sqrt(np.sum(node**2, axis=1))
     node = node / r0[:, None]
@@ -612,7 +612,7 @@ def meshunitsphere(tsize, maxvol=None):
         maxvol = tsize**3
 
     # Call a surf2mesh equivalent in Python here (needs a custom function)
-    node, elem, face = surf2mesh(
+    node, elem, face = im.surf2mesh(
         node, face, np.array([-1, -1, -1]) * 1.1, np.array([1, 1, 1]) * 1.1, 1, maxvol
     )
 
@@ -632,8 +632,14 @@ def meshasphere(c0, r, tsize, maxvol=None):
 
     return node, face, elem if maxvol is not None else (node, face)
 
+#_________________________________________________________________________________________________________
 
-def meshacylinder(c0, c1, r, tsize=0, maxvol=0, ndiv=20):
+def meshacylinder(c0, c1, r, **kwargs):#tsize=0, maxvol=0, ndiv=20):
+
+    tsize = kwargs['tsize'] if 'tsize' in kwargs else 0
+    maxvol = kwargs['maxvol'] if 'maxvol' in kwargs else 0
+    ndiv = kwargs['ndiv'] if 'ndiv' in kwargs else 20
+
     if len(np.array([r])) == 1:
         r = np.array([r, r])
 
@@ -646,7 +652,7 @@ def meshacylinder(c0, c1, r, tsize=0, maxvol=0, ndiv=20):
     len_axis = np.linalg.norm(v0)
 
     if tsize == 0:
-        tsize = min(r + [len_axis]) / 10
+        tsize = min(np.append(r,len_axis)) / 10
 
     if maxvol == 0:
         maxvol = tsize**3 / 5
@@ -669,13 +675,21 @@ def meshacylinder(c0, c1, r, tsize=0, maxvol=0, ndiv=20):
         face.append([[[i, i + ndiv, i + ndiv + 1, i + 1]], [1]])
 
     face.append([[[ndiv - 1, 2 * ndiv - 1, ndiv, 0]], [1]])
-    face.append([[list(range(ndiv))],[3]])
+    face.append([[list(range(ndiv))],[2]])
     face.append([[list(range(ndiv, 2 * ndiv))], [3]])
 
     if tsize == 0 and maxvol == 0:
         return no, face
 
-    node, elem, face = im.surf2mesh(no, face, np.min(no, axis=0), np.max(no, axis=0), 1, maxvol)
+    if not 'tsize' in kwargs:
+        tsize = len_axis/10
+
+    if not 'maxvol' in kwargs:
+        maxvol = tsize**3
+
+    node, elem, *_ = im.surf2mesh(no, face, np.min(no, axis=0), np.max(no, axis=0), 1, maxvol,regions=np.array([[0,0,1]]),holes=np.array([]))
+    face, *_ = volface(elem[:,0:4])
+
     return node, face, elem
 
 #_________________________________________________________________________________________________________

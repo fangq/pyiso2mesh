@@ -503,7 +503,6 @@ def readtetgen(fstub):
     try:
         with open(f"{fstub}.ele", 'rb') as fp:
             dim = [int(x) for x in next(fp).split()]
-            print(dim)
             if len(dim) < 3:
                 raise ValueError('wrong elem file')
             elem = np.array([])
