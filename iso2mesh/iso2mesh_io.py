@@ -560,8 +560,6 @@ def savesurfpoly(v, f, holelist, regionlist, p0, p1, fname, forcebox=None):
     if forcebox != None:
         dobbx = any([forcebox])
 
-    print(v, f)
-
     faceid = f[:,3] if not isinstance(f, list) and len(f.shape)>1 and f.shape[1] == 4 else None
     f = f[:,:3] if not isinstance(f, list) and len(f.shape)>1 and f.shape[1] == 4 else f
 

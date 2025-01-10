@@ -22,6 +22,7 @@ __all__ = [
     "meshacylinder",
     "meshanellip",
     "meshunitsphere",
+    "meshasphere",
 ]
 
 ##====================================================================================
@@ -608,8 +609,10 @@ def meshunitsphere(tsize, **kwargs):
     r0 = np.sqrt(np.sum(node**2, axis=1))
     node = node / r0[:, None]
 
-    if not 'maxvol' in kwargs:
-        maxvol = tsize**3
+#    if not 'maxvol' in kwargs:
+#        maxvol = tsize**3
+
+    maxvol = kwargs['maxvol'] if 'maxvol' in kwargs else tsize**3
 
     # Call a surf2mesh equivalent in Python here (needs a custom function)
     node, elem, face = im.surf2mesh(node, face, np.array([-1, -1, -1]) * 1.1, np.array([1, 1, 1]) * 1.1, 1, maxvol)
@@ -623,13 +626,13 @@ def meshasphere(c0, r, tsize, maxvol=None):
         maxvol = tsize**3
 
     if maxvol is not None:
-        node, face, elem = meshunitsphere(tsize / r, maxvol / (r**3))
+        node, face, elem = meshunitsphere(tsize / r, maxvol=maxvol / (r**3))
     else:
-        node, face = meshunitsphere(tsize / r)
+        node, face, elem = meshunitsphere(tsize / r)
 
     node = node * r + np.tile(np.array(c0).reshape(1, -1), (node.shape[0], 1))
 
-    return node, face, elem if maxvol is not None else (node, face)
+    return node, face, elem #if maxvol is not None else (node, face)
 
 #_________________________________________________________________________________________________________
 

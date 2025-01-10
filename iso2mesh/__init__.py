@@ -18,6 +18,7 @@ from .iso2mesh_primitive import (
     meshacylinder,
     meshanellip,
     meshunitsphere,
+    meshasphere,
 )
 
 from .iso2mesh_utils import  (
@@ -149,5 +150,6 @@ __all__ = [
     "removeisolatednode",
     "meshunitsphere",
     "fallbackexeext",
+    "meshasphere",
 ]
 __license__ = """GNU General Public License v3 and later"""
