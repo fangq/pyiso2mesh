@@ -51,16 +51,16 @@ def fallbackexeext(exesuffix, exename):
         exesuff: file extension for iso2mesh tool binaries
     """
     exesuff = exesuffix
-    if exesuff == '.mexa64' and not os.path.isfile(os.path.join(im.mcpath(exename), exesuff)):  # fall back to i386 linux
+    if exesuff == '.mexa64' and not os.path.isfile(im.mcpath(exename)+exesuff):  # fall back to i386 linux
         exesuff = '.mexglx'
-    if exesuff == '.mexmaci64' and not os.path.isfile(os.path.join(im.mcpath(exename), exesuff)):  # fall back to i386 mac
+    if exesuff == '.mexmaci64' and not os.path.isfile(im.mcpath(exename)+exesuff):  # fall back to i386 mac
         exesuff = '.mexmaci'
-    if exesuff == '.mexmaci' and not os.path.isfile(os.path.join(im.mcpath(exename), exesuff)):  # fall back to ppc mac
+    if exesuff == '.mexmaci' and not os.path.isfile(im.mcpath(exename)+exesuff):  # fall back to ppc mac
         exesuff = '.mexmac'
-    if not os.path.isfile(os.path.join(im.mcpath(exename), exesuff)) and not os.path.isfile(os.path.join(im.mcpath(exename))):  # fall back to OS native package
+    if not os.path.isfile(im.mcpath(exename)+exesuff) and not os.path.isfile(os.path.join(im.mcpath(exename))):  # fall back to OS native package
         exesuff = ''
 
-    if not os.path.isfile(os.path.join(im.mcpath(exename), exesuff)) and not os.path.isfile(im.mcpath(exename)):
+    if not os.path.isfile(im.mcpath(exename)+exesuff) and not os.path.isfile(im.mcpath(exename)):
         #if subprocess.call(['which', exename]) == 0:
         #    return
         raise FileNotFoundError(f'The following executable:\n\t{im.mcpath(exename)}{getexeext()}\n'
