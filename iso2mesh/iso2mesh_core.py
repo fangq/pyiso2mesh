@@ -453,7 +453,7 @@ def surf2mesh(v,f,p0,p1,keepratio,maxvol,regions=None,holes=None,dobbx=0,method=
     if not isinstance(el, list) and no.size and el.size:
         im.saveoff(no[:, :3], el[:, :3], "post_vmesh.off")
     im.deletemeshfile(im.mwpath('post_vmesh.mtr'))
-    im.savesurfpoly(no, el, holes, regions, p0, p1, mwpath("post_vmesh.poly"),forcebox=dobbx)
+    im.savesurfpoly(no, el, holes, regions, p0, p1, im.mwpath("post_vmesh.poly"),forcebox=dobbx)
 
     moreopt = ''
     if len(no.shape) > 1 and no.shape[1] == 4:
@@ -470,7 +470,7 @@ def surf2mesh(v,f,p0,p1,keepratio,maxvol,regions=None,holes=None,dobbx=0,method=
 
     if not cmdopt:
         print(im.mcpath(method,exesuff))
-        status, cmdout = subprocess.getstatusoutput('"' + im.mcpath(method,exesuff) + '"'+ ' -A -q1.414a' + str(maxvol) + ' '+ moreopt + ' ' + mwpath('post_vmesh.poly'))
+        status, cmdout = subprocess.getstatusoutput('"' + im.mcpath(method,exesuff) + '"'+ ' -A -q1.414a' + str(maxvol) + ' '+ moreopt + ' ' + im.mwpath('post_vmesh.poly'))
     else:
         status, cmdout = subprocess.getstatusoutput(f"{method} {cmdopt} post_vmesh.poly")
 
@@ -1071,44 +1071,52 @@ def meshcheckrepair(node, elem, opt=None, *args):
         if l2 != l1:
             print(f"{l1 - l2} duplicated elements were removed")
 
+
+
     if opt in (None, "isolated"):
         l1 = len(node)
-        node, elem = removeisolatednode(node, elem)
+        node, elem, _ = removeisolatednode(node, elem)
         l2 = len(node)
         if l2 != l1:
             print(f"{l1 - l2} isolated nodes were removed")
 
     if opt == "open":
-        eg = surfedge(elem)
+        eg = im.surfedge(elem)
         if eg:
             raise ValueError(
                 "Open surface found. You need to enclose it by padding zeros around the volume."
             )
 
     if opt in (None, "deep"):
-        exesuff = fallbackexeext(getexeext(), "jmeshlib")
-        deletemeshfile(mwpath("post_sclean.off"))
-        saveoff(node[:, :3], elem[:, :3], mwpath("pre_sclean.off"))
-        status, output = subprocess.getstatusoutput(
-            f'"{mcpath("jmeshlib")}{exesuff}" "{mwpath("pre_sclean.off")}" "{mwpath("post_sclean.off")}"'
-        )
+        exesuff = im.fallbackexeext(im.getexeext(), "jmeshlib")
+        print(exesuff)
+        im.deletemeshfile(im.mwpath("post_sclean.off"))
+        im.saveoff(node[:, :3], elem[:, :3], im.mwpath("pre_sclean.off"))
+        if '.exe' not in exesuff:
+            status, output = subprocess.getstatusoutput(
+                f'"{im.mcpath("jmeshlib")}{exesuff}" "{im.mwpath("pre_sclean.off")}" "{im.mwpath("post_sclean.off")}"'
+            )
+        else:
+            status, output = subprocess.getstatusoutput(
+                f'"{im.mcpath("jmeshlib")}" "{im.mwpath("pre_sclean.off")}" "{im.mwpath("post_sclean.off")}"'
+            )
         if status:
             raise RuntimeError(f"jmeshlib command failed: {output}")
-        node, elem = readoff(mwpath("post_sclean.off"))
+        node, elem = im.readoff(im.mwpath("post_sclean.off"))
 
     if opt == "meshfix":
-        exesuff = fallbackexeext(getexeext(), "meshfix")
+        exesuff = im.fallbackexeext(im.getexeext(), "meshfix")
         moreopt = extra.get("MeshfixParam", " -q -a 0.01 ")
-        deletemeshfile(mwpath("pre_sclean.off"))
-        deletemeshfile(mwpath("pre_sclean_fixed.off"))
-        saveoff(node, elem, mwpath("pre_sclean.off"))
+        im.deletemeshfile(im.mwpath("pre_sclean.off"))
+        im.deletemeshfile(im.mwpath("pre_sclean_fixed.off"))
+        im.saveoff(node, elem, im.mwpath("pre_sclean.off"))
         status = subprocess.call(
-            f'"{mcpath("meshfix")}{exesuff}" "{mwpath("pre_sclean.off")}" {moreopt}',
+            f'"{im.mcpath("meshfix")}{exesuff}" "{im.mwpath("pre_sclean.off")}" {moreopt}',
             shell=True,
         )
         if status:
             raise RuntimeError("meshfix command failed")
-        node, elem = readoff(mwpath("pre_sclean_fixed.off"))
+        node, elem = im.readoff(im.mwpath("pre_sclean_fixed.off"))
 
     if opt == "intersect":
         moreopt = f' -q --no-clean --intersect -o "{mwpath("pre_sclean_inter.msh")}"'
@@ -1140,8 +1148,8 @@ def removedupelem(elem):
     sorted_elem = np.sort(elem, axis=1)
 
     # Find unique rows and their indices
-    _, idx, counts = np.unique(
-        sorted_elem, axis=0, return_index=True, return_counts=True
+    sort_elem, idx, counts = np.unique(
+        sorted_elem, axis=0, return_index=True, return_inverse=True
     )
 
     # Histogram of element occurrences
@@ -1796,60 +1804,6 @@ def fillsurf(node, face):
     return no, el
 
 
-def mcpath(fname, ext=None):
-    """
-    Get full executable path by prepending a command directory path.
-
-    Parameters:
-    fname : str
-        Input file name string.
-    ext : str, optional
-        File extension to append.
-
-    Returns:
-    binname : str
-        Full file name located in the bin directory or found via system PATH.
-    """
-
-    # Check if ISO2MESH_BIN environment variable is set
-    p = os.getenv("ISO2MESH_BIN")
-    binname = None
-
-    if p is None:
-        # Search in the bin folder under the current script directory
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        tempname = os.path.join(script_dir, "bin", fname)
-
-        if os.path.exists(os.path.join(script_dir, "bin")):
-            if ext is not None:
-                if os.path.exists(tempname + ext):
-                    binname = tempname + ext
-                else:
-                    binname = fname  # Fallback to fname without suffix
-            else:
-                binname = tempname
-        else:
-            binname = fname
-    else:
-        binname = os.path.join(p, fname)
-
-    # For 64-bit Windows, check for '_x86-64.exe' suffix
-    if (
-        platform.system() == "Windows"
-        and "64" in platform.architecture()[0]
-        and not fname.endswith("_x86-64")
-    ):
-        w64bin = re.sub(r"(\.[eE][xX][eE])?$", "_x86-64.exe", binname)
-        if os.path.exists(w64bin):
-            binname = w64bin
-
-    # If file doesn't exist, fall back to searching in system PATH
-    if ext is not None and not os.path.exists(binname):
-        binname = fname
-
-    return binname
-
-
 def vol2restrictedtri(vol, thres, cent, brad, ang, radbound, distbound, maxnode):
     """
     Surface mesh extraction using CGAL mesher.
@@ -1912,10 +1866,9 @@ def vol2restrictedtri(vol, thres, cent, brad, ang, radbound, distbound, maxnode)
 
     # Read the resulting mesh
     node, elem = im.readoff(im.mwpath("post_extract.off"))
-    print(node,elem)
 
     # Check and repair mesh if needed
-    # node, elem = meshcheckrepair(node, elem)
+    node, elem = meshcheckrepair(node, elem)
 
     # Assuming the origin [0, 0, 0] is located at the lower-bottom corner of the image
     node += 0.5

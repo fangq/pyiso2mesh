@@ -600,12 +600,10 @@ def meshunitsphere(tsize, **kwargs):
     dist[dist < 0] = 0
 
     # Call a vol2restrictedtri equivalent in Python here (needs a custom function)
-    node, face = im.vol2restrictedtri(
-        dist, 1, (dim, dim, dim), dim**3, 30, esize, esize, 40000
-    )
+    node, face = im.vol2restrictedtri(dist, 1, (dim, dim, dim), dim**3, 30, esize, esize, 40000)
 
     node = (node - 0.5) * 0.5
-    node, face = im.removeisolatednode(node, face)
+    node, face, _ = im.removeisolatednode(node, face)
     node = (node - 30) / 28
     r0 = np.sqrt(np.sum(node**2, axis=1))
     node = node / r0[:, None]
@@ -614,9 +612,7 @@ def meshunitsphere(tsize, **kwargs):
         maxvol = tsize**3
 
     # Call a surf2mesh equivalent in Python here (needs a custom function)
-    node, elem, face = im.surf2mesh(
-        node, face, np.array([-1, -1, -1]) * 1.1, np.array([1, 1, 1]) * 1.1, 1, maxvol
-    )
+    node, elem, face = im.surf2mesh(node, face, np.array([-1, -1, -1]) * 1.1, np.array([1, 1, 1]) * 1.1, 1, maxvol)
 
     return node, face, elem
 

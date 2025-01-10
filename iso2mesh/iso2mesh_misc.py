@@ -8,6 +8,7 @@ Copyright (c) 2024 Edward Xu <xu.ed at neu.edu>
 __all__ = [
     "getexeext",
     "rotatevec3d",
+    "fallbackexeext",
 ]
 ##====================================================================================
 ## dependent libraries
@@ -15,6 +16,8 @@ __all__ = [
 
 import sys
 import numpy as np
+import os
+import iso2mesh as im
 
 ##====================================================================================
 ## implementations
@@ -22,6 +25,7 @@ import numpy as np
 
 def getexeext():
 
+    ext = '.exe'
     if sys.platform=='linux':
         ext = '.mexa64'
     elif 'win' in sys.platform:
@@ -33,6 +37,38 @@ def getexeext():
 
     return ext
 
+#_________________________________________________________________________________________________________
+
+def fallbackexeext(exesuffix, exename):
+    """
+    Get the fallback external tool extension names for the current platform.
+
+    Parameters:
+        exesuffix: the output executable suffix from getexeext
+        exename: the executable name
+
+    Returns:
+        exesuff: file extension for iso2mesh tool binaries
+    """
+    exesuff = exesuffix
+    if exesuff == '.mexa64' and not os.path.isfile(os.path.join(im.mcpath(exename), exesuff)):  # fall back to i386 linux
+        exesuff = '.mexglx'
+    if exesuff == '.mexmaci64' and not os.path.isfile(os.path.join(im.mcpath(exename), exesuff)):  # fall back to i386 mac
+        exesuff = '.mexmaci'
+    if exesuff == '.mexmaci' and not os.path.isfile(os.path.join(im.mcpath(exename), exesuff)):  # fall back to ppc mac
+        exesuff = '.mexmac'
+    if not os.path.isfile(os.path.join(im.mcpath(exename), exesuff)) and not os.path.isfile(os.path.join(im.mcpath(exename))):  # fall back to OS native package
+        exesuff = ''
+
+    if not os.path.isfile(os.path.join(im.mcpath(exename), exesuff)) and not os.path.isfile(im.mcpath(exename)):
+        #if subprocess.call(['which', exename]) == 0:
+        #    return
+        raise FileNotFoundError(f'The following executable:\n\t{im.mcpath(exename)}{getexeext()}\n'
+                                'is missing. Please download it from '
+                                'https://github.com/fangq/iso2mesh/tree/master/bin/ '
+                                'and save it to the above path, then rerun the script.\n')
+
+    return exesuff
 #_________________________________________________________________________________________________________
 
 def rotatevec3d(pt, v1, u1=None, p0=None):

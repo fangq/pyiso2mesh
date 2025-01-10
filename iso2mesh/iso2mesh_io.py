@@ -12,7 +12,6 @@ __all__ = [
     "saveasc",
     "savestl",
     "savebinstl",
-    "saveoff",
     "mwpath",
     "deletemeshfile",
     "readtetgen",
@@ -110,7 +109,7 @@ def saveoff(v, f, fname):
             fid.write(f"{len(v)}\t{len(f)}\t0\n")
             for vertex in v:
                 fid.write(f"{vertex[0]:.16f}\t{vertex[1]:.16f}\t{vertex[2]:.16f}\n")
-            face = [[len(f[0])]] + [list(face_row - 1) for face_row in f]
+            face = [[len(f[0])] + list(face_row) for face_row in f]
             format_str = '\t'.join(['%d'] * len(face[0])) + '\n'
             for face_row in face:
                 fid.write(format_str % tuple(face_row))
@@ -561,6 +560,8 @@ def savesurfpoly(v, f, holelist, regionlist, p0, p1, fname, forcebox=None):
     if forcebox != None:
         dobbx = any([forcebox])
 
+    print(v, f)
+
     faceid = f[:,3] if not isinstance(f, list) and len(f.shape)>1 and f.shape[1] == 4 else None
     f = f[:,:3] if not isinstance(f, list) and len(f.shape)>1 and f.shape[1] == 4 else f
 
@@ -648,9 +649,9 @@ def savesurfpoly(v, f, holelist, regionlist, p0, p1, fname, forcebox=None):
 
         if not isinstance(f, list):
             fp.write('#facet list\n{} 1\n'.format(len(f) + bbxnum + len(loopvert)))
-            elem = np.hstack((3 * np.ones((len(f), 1)), f - 1)) if f.size > 1 else np.array([])
+            elem = np.hstack((3 * np.ones((len(f), 1)), f)) if f.size > 1 else np.array([])
             if elem.size > 0:
-                if 'faceid' in locals() and len(faceid) == elem.shape[0]:
+                if faceid is not None and len(faceid) == elem.shape[0]:
                     for i in range(len(faceid)):
                         fp.write('1 0 {} \n{} {} {} {}\n'.format(faceid[i], *elem[i]))
                 else:
@@ -760,45 +761,49 @@ def readoff(fname):
         node: node coordinates of the mesh
         elem: list of elements of the mesh
     """
-
     node = []
     elem = []
 
     with open(fname, 'rb') as fid:
         line = fid.readline().decode('utf-8').strip()
-        dim = np.fromstring(line[4:], sep=' ', count=3, dtype=int)
-        print(dim)
-
+        dim = re.search('[0-9.]+ [0-9.]+ [0-9.]+', line)
         line = nonemptyline(fid)
-        if dim.size != 3:
-            dim = np.fromstring(line, sep=' ', count=3, dtype=int)
+
+        if not dim:
+            dim = np.fromstring(re.search('[0-9.]+ [0-9.]+ [0-9.]+', line).group(), sep=' ', dtype=int)
             line = nonemptyline(fid)
+        else:
+            dim = np.fromstring(dim.group(), sep=' ', dtype=int)
 
         nodalcount = 3
         if line:
-            val, nodalcount = np.fromstring(line, sep=' ', count=nodalcount, dtype=float), nodalcount
+            val = np.fromstring(line, sep=' ', count=-1, dtype=float)
+            nodalcount = len(val)
         else:
             return node, elem
 
-        node = np.fromfile(fid, dtype=float, count=(nodalcount * (dim[0] - 1))).reshape(-1, nodalcount)
+        node = np.fromfile(fid, dtype=float, sep =' ', count=(nodalcount * (dim[0] - 1))).reshape(-1, nodalcount)
         node = np.vstack((val, node))
 
         line = nonemptyline(fid)
         facetcount = 4
         if line:
-            val, facetcount = np.fromstring(line, sep=' ', count=facetcount, dtype=float), facetcount
+            val = np.fromstring(line, sep=' ', count=-1, dtype=float)
+            facetcount = len(val)
         else:
             return node, elem
 
-        elem = np.fromfile(fid, dtype=float, count=(facetcount * (dim[1] - 1))).reshape(-1, facetcount)
+        elem = np.fromfile(fid, dtype=float, sep=' ',count=(facetcount * (dim[1] - 1))).reshape(-1, facetcount)
         elem = np.vstack((val, elem))
 
     elem = elem[:, 1:]
 
     if elem.shape[1] <= 3:
-        elem[:, :3] = np.round(elem[:, :3]) + 1
+        elem[:, :3] = np.round(elem[:, :3])
     else:
-        elem[:, :4] = np.round(elem[:, :4]) + 1
+        elem[:, :4] = np.round(elem[:, :4])
+
+    elem = elem.astype(int)
 
     return node, elem
 
@@ -816,7 +821,7 @@ def nonemptyline(fid):
         raise ValueError('invalid file')
 
     while (not re.search(r'\S', str_) or re.search(r'^#', str_)) and not fid.closed:
-        str_ = fid.readline()
+        str_ = fid.readline().decode('utf-8').strip()
         if not isinstance(str_, str):
             str_ = ''
             return str_

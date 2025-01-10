@@ -89,7 +89,7 @@ def finddisconnsurf(f):
 
 #_________________________________________________________________________________________________________
 
-def surfedge(f, junction=0):
+def surfedge(f, junction=None):
     """
     Find the edge of an open surface or surface of a volume.
 
@@ -123,17 +123,18 @@ def surfedge(f, junction=0):
     _, ix, jx = np.unique(edgesort, axis=0, return_index=True, return_inverse=True)
 
     vec = np.bincount(jx, minlength=max(jx) + 1)
-    if f.shape[1] == 3 and junction:
+    if f.shape[1] == 3 and junction is not None:
         qx = np.where(vec > 2)[0]
     else:
         qx = np.where(vec == 1)[0]
 
     openedge = edges[ix[qx], :]
     elemid = None
-    if len(varargin) >= 2:
+    if junction is not None:
         elemid, iy = np.unravel_index(ix[qx], f.shape)
 
     return openedge, elemid
+
 
 #_________________________________________________________________________________________________________
 

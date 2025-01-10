@@ -57,6 +57,7 @@ from .iso2mesh_utils import  (
 from .iso2mesh_misc import (
     getexeext,
     rotatevec3d,
+    fallbackexeext,
 )
 
 from .iso2mesh_io import (
@@ -147,5 +148,6 @@ __all__ = [
     "vol2restrictedtri",
     "removeisolatednode",
     "meshunitsphere",
+    "fallbackexeext",
 ]
 __license__ = """GNU General Public License v3 and later"""
